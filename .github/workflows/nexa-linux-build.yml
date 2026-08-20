@@ -1,0 +1,52 @@
+name: Nexa Linux Build
+on:
+  workflow_dispatch:
+    inputs:
+      nexa_version:
+        required: false
+        default: manual
+      nexa_build_id:
+        required: false
+        default: "0"
+permissions:
+  contents: read
+concurrency:
+  group: nexa-linux-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Apply Nexa version
+        run: |
+          if [[ "${{ inputs.nexa_version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            npm version "${{ inputs.nexa_version }}" --no-git-tag-version --allow-same-version
+          fi
+      - name: Install dependencies
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Validate source
+        run: npm run validate
+      - name: Build AppImage and DEB
+        run: npm run build:linux
+      - name: Upload Linux AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexa-Linux-AppImage-${{ inputs.nexa_version }}-Build-${{ inputs.nexa_build_id }}
+          path: release/**/*.AppImage
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload Linux DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexa-Linux-DEB-${{ inputs.nexa_version }}-Build-${{ inputs.nexa_build_id }}
+          path: release/**/*.deb
+          if-no-files-found: error
+          retention-days: 30

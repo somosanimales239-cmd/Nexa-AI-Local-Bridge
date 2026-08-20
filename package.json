@@ -1,0 +1,113 @@
+{
+  "name": "nexa-ai-local-bridge",
+  "version": "1.0.0",
+  "description": "Secure Windows companion that connects the user's computer to Nexa AI Computer Bridge on Hostinger.",
+  "main": "main.js",
+  "author": "Nexa",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "validate": "node --check main.js && node --check preload.js && node --check src/app.js && node --check src/services/bridge-client.js && node --check src/services/secure-config.js && node --check src/services/system-info.js && node --check src/services/policy.js && node --check src/services/logger.js && npm run validate:delivery && npm run validate:project && npm test",
+    "build:win": "npm run validate && electron-builder --win nsis portable zip --x64 --publish never",
+    "build:linux": "npm run validate && electron-builder --linux AppImage deb --publish never",
+    "build:mac": "npm run validate && electron-builder --mac dmg zip --publish never",
+    "validate:delivery": "node scripts/validate-delivery.js",
+    "validate:project": "node scripts/validate-project.js",
+    "test": "node --test scripts/*.test.js",
+    "ui:smoke": "electron scripts/ui-smoke.js"
+  },
+  "devDependencies": {
+    "electron": "43.1.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.nexa.ailocalbridge",
+    "productName": "Nexa AI Local Bridge",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Nexa AI Local Bridge",
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+      "allowElevation": true,
+      "perMachine": false,
+      "uninstallDisplayName": "Nexa AI Local Bridge",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Utility",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.utilities",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

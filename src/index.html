@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
+  <title>Nexa AI Local Bridge</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="ambient a1"></div><div class="ambient a2"></div>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">N</span>
+        <div><strong>Nexa AI Local Bridge</strong><small>Secure Windows Companion</small></div>
+      </div>
+      <div class="header-right">
+        <span id="version" class="version">v1.0.0</span>
+        <span id="statusPill" class="status-pill offline"><i></i><b id="statusText">UNPAIRED</b></span>
+      </div>
+    </header>
+
+    <section id="emergencyBanner" class="emergency hidden" data-testid="emergency-stop">
+      <strong>EMERGENCY STOP ACTIVE</strong>
+      <span>Remote execution readiness is blocked by the Hostinger control center.</span>
+    </section>
+
+    <section class="layout">
+      <div class="main-column">
+        <article class="card connection-card">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">CONNECTION</span>
+              <h1>PC ↔ Hostinger Bridge</h1>
+              <p id="statusMessage">Pair this PC with your Hostinger control center.</p>
+            </div>
+            <button id="reconnectBtn" class="btn secondary" type="button" data-nexa-action="reconnect">Reconnect</button>
+          </div>
+
+          <div class="form-grid">
+            <label class="field full">
+              <span>Agent Endpoint</span>
+              <input id="endpoint" type="url" spellcheck="false" placeholder="https://your-domain.com/api/agent.php">
+            </label>
+            <label class="field full">
+              <span>Pairing Token</span>
+              <input id="token" type="password" autocomplete="off" placeholder="nexa_...">
+              <small id="tokenHint">Generated in your Nexa AI Computer Bridge dashboard.</small>
+            </label>
+            <label class="field">
+              <span>Device Label</span>
+              <input id="deviceLabel" type="text" maxlength="100" value="Main Windows PC">
+            </label>
+            <div class="field actions-field">
+              <span>Connection actions</span>
+              <div class="button-row">
+                <button id="testBtn" class="btn secondary" type="button" data-testid="test-connection">Test Connection</button>
+                <button id="connectBtn" class="btn primary" type="button" data-testid="connect">Connect</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="testResult" class="test-result hidden" aria-live="polite"></div>
+        </article>
+
+        <article class="card">
+          <div class="section-heading compact">
+            <div>
+              <span class="eyebrow">SERVER POLICY</span>
+              <h2>Permissions from Hostinger</h2>
+              <p>These indicators are read-only. Change them from the web control center.</p>
+            </div>
+            <div class="policy-chips">
+              <span id="bridgeChip" class="chip blocked">Bridge Disabled</span>
+              <span id="fullModeChip" class="chip blocked">Controlled Mode</span>
+            </div>
+          </div>
+          <div id="permissionGrid" class="permissions" data-testid="permissions"></div>
+        </article>
+
+        <article class="card">
+          <div class="section-heading compact">
+            <div><span class="eyebrow">LOCAL ACTIVITY</span><h2>Recent events</h2></div>
+            <button id="openLogsBtn" class="btn secondary small" type="button">Open logs folder</button>
+          </div>
+          <div id="activity" class="activity"></div>
+        </article>
+      </div>
+
+      <aside class="side-column">
+        <article class="card machine-card">
+          <span class="eyebrow">THIS COMPUTER</span>
+          <div class="machine-orb"><span>PC</span></div>
+          <h2 id="pcName">Loading…</h2>
+          <p id="osName">Windows</p>
+          <dl>
+            <div><dt>GPU</dt><dd id="gpu">Loading…</dd></div>
+            <div><dt>Local IP</dt><dd id="localIp">—</dd></div>
+            <div><dt>Last heartbeat</dt><dd id="lastHeartbeat">Never</dd></div>
+            <div><dt>Server time</dt><dd id="serverTime">—</dd></div>
+          </dl>
+        </article>
+
+        <article class="card">
+          <span class="eyebrow">LOCAL CONTROLS</span>
+          <div class="toggle-list">
+            <label class="toggle-row">
+              <span><strong>Auto-connect</strong><small>Reconnect when the app opens.</small></span>
+              <input id="autoConnect" type="checkbox"><i></i>
+            </label>
+            <label class="toggle-row">
+              <span><strong>Start with Windows</strong><small>Disabled by default.</small></span>
+              <input id="startWithWindows" type="checkbox"><i></i>
+            </label>
+          </div>
+          <div class="stack-buttons">
+            <button id="disconnectBtn" class="btn secondary" type="button" data-testid="disconnect">Disconnect</button>
+            <button id="unpairBtn" class="btn danger" type="button" data-testid="unpair">Unpair this PC</button>
+          </div>
+        </article>
+
+        <article class="card future-card">
+          <span class="eyebrow">NEXT LAYER</span>
+          <h2>ChatGPT / MCP</h2>
+          <p>This v1 creates the real secure PC ↔ Hostinger connection. AI command execution will be attached to this bridge in the next controlled layer.</p>
+        </article>
+      </aside>
+    </section>
+
+    <footer><span>Nexa AI Local Bridge</span><span>Secure outbound HTTPS connection · no inbound PC port</span></footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

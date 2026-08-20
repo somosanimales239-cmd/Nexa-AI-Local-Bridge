@@ -1,0 +1,53 @@
+name: Nexa macOS Build
+on:
+  workflow_dispatch:
+    inputs:
+      nexa_version:
+        required: false
+        default: manual
+      nexa_build_id:
+        required: false
+        default: "0"
+permissions:
+  contents: read
+concurrency:
+  group: nexa-macos-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate-and-build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Apply Nexa version
+        run: |
+          if [[ "${{ inputs.nexa_version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            npm version "${{ inputs.nexa_version }}" --no-git-tag-version --allow-same-version
+          fi
+      - name: Install dependencies
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Validate source
+        run: npm run validate
+      - name: Build DMG and ZIP
+        run: npm run build:mac
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexa-macOS-DMG-${{ inputs.nexa_version }}-Build-${{ inputs.nexa_build_id }}
+          path: release/**/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload macOS ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexa-macOS-ZIP-${{ inputs.nexa_version }}-Build-${{ inputs.nexa_build_id }}
+          path: release/**/*.zip
+          if-no-files-found: error
+          retention-days: 30

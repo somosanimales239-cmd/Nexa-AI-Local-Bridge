@@ -1,0 +1,585 @@
+name: Nexa Windows Build
+on:
+  workflow_dispatch:
+    inputs:
+      nexa_version:
+        description: Nexa project version
+        required: false
+        default: manual
+      nexa_build_id:
+        description: Nexa build record ID
+        required: false
+        default: "0"
+permissions:
+  contents: read
+concurrency:
+  group: nexa-windows-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate-and-build:
+    runs-on: windows-latest
+    timeout-minutes: 65
+    env:
+      CI: "true"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Resolve Node.js runtime
+        id: nexa_node
+        shell: pwsh
+        run: |
+          # NEXA_NODE_RUNTIME_RESOLUTION_V1
+          $resolved = 24
+          if (Test-Path package.json) {
+            $package = Get-Content package.json -Raw | ConvertFrom-Json
+            $range = [string]$package.engines.node
+            if (-not [string]::IsNullOrWhiteSpace($range)) {
+              $match = [regex]::Match($range, '(?:>=|\^|~)?\s*(\d{2})(?:\.\d+)?')
+              if ($match.Success) { $resolved = [int]$match.Groups[1].Value }
+            }
+          }
+          if ($resolved -lt 20) { $resolved = 20 }
+          "version=$resolved" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Resolved Node.js major: $resolved"
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "${{ steps.nexa_node.outputs.version }}"
+      - name: Verify Node.js runtime
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $range = [string]$package.engines.node
+          if (-not [string]::IsNullOrWhiteSpace($range)) {
+            $required = [regex]::Match($range, '>=\s*(\d+)')
+            if ($required.Success) {
+              $actual = [int](node -p "process.versions.node.split('.')[0]")
+              if ($actual -lt [int]$required.Groups[1].Value) { throw "Configured Node.js $actual does not satisfy engines.node $range" }
+            }
+          }
+      - name: Resolve application version
+        shell: pwsh
+        run: |
+          # NEXA_APPLICATION_VERSION_METADATA_V1
+          if (-not (Test-Path package.json)) { throw "package.json was not found" }
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = [string]$package.version
+          if ($version -notmatch "^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$") { throw "package.json contains an invalid application version" }
+          $expected = "${{ inputs.nexa_version }}"
+          if ($expected -match "^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$" -and $expected -ne $version) { throw "Requested application version $expected does not match package.json version $version" }
+          if (Test-Path nexa.project.json) {
+            $project = Get-Content nexa.project.json -Raw | ConvertFrom-Json
+            $projectVersion = if ($project.application_version) { [string]$project.application_version } else { [string]$project.version }
+            if ($projectVersion -ne $version) { throw "nexa.project.json application version $projectVersion does not match package.json version $version" }
+          }
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Application version: $version"
+      - name: Resolve portable dependency lock
+        shell: pwsh
+        run: |
+          # NEXA_DEPENDENCY_LOCK_PORTABILITY_V1
+          if (-not (Test-Path package.json)) { throw "package.json was not found" }
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $mustGenerate = -not (Test-Path package-lock.json)
+          if (-not $mustGenerate) {
+            node -e 'const fs=require("fs");const path="package-lock.json";const lock=JSON.parse(fs.readFileSync(path,"utf8"));let removed=0;const hosts={};function walk(value){if(!value||typeof value!=="object")return;if(typeof value.resolved==="string"&&typeof value.integrity==="string"&&/^https?:\/\//i.test(value.resolved)){let parsed=null;try{parsed=new URL(value.resolved)}catch{}if(parsed&&/\.tgz$/i.test(parsed.pathname)){hosts[parsed.hostname]=(hosts[parsed.hostname]||0)+1;delete value.resolved;removed++}}for(const child of Object.values(value))walk(child)}walk(lock);fs.mkdirSync("artifacts",{recursive:true});fs.writeFileSync("artifacts/dependency-lock-portability.json",JSON.stringify({removed_registry_endpoints:removed,hosts},null,2));if(removed)fs.writeFileSync(path,JSON.stringify(lock,null,2)+"\n");console.log(`Portable dependency lock: removed ${removed} environment-specific registry endpoint(s).`);'
+          }
+          if ($mustGenerate) {
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund --omit-lockfile-registry-resolved
+            if ($LASTEXITCODE -ne 0) { throw "npm could not resolve a portable package-lock.json" }
+          }
+          if (-not (Test-Path package-lock.json)) { throw "package-lock.json was not generated" }
+          node -e 'const fs=require("fs");const pkg=JSON.parse(fs.readFileSync("package.json","utf8"));const lock=JSON.parse(fs.readFileSync("package-lock.json","utf8"));if(!lock.packages||!Object.prototype.hasOwnProperty.call(lock.packages,""))throw new Error("package-lock.json has no root package record");const deps={...(pkg.dependencies||{}),...(pkg.devDependencies||{})};const missing=Object.keys(deps).filter(name=>!Object.prototype.hasOwnProperty.call(lock.packages,`node_modules/${name}`));if(missing.length)throw new Error(`package-lock.json is missing resolved dependencies: ${missing.join(", ")}`);let unsafe=0;function walk(v){if(!v||typeof v!=="object")return;if(typeof v.resolved==="string"&&typeof v.integrity==="string"&&/^https?:\/\//i.test(v.resolved)){let u;try{u=new URL(v.resolved)}catch{}if(u&&/\.tgz$/i.test(u.pathname))unsafe++;}for(const x of Object.values(v))walk(x)}walk(lock);if(unsafe)throw new Error(`package-lock.json still contains ${unsafe} environment-specific registry endpoint(s)`);console.log(`Dependency lock verified for ${Object.keys(deps).length} declared package(s).`);'
+          if ($LASTEXITCODE -ne 0) { throw "portable package-lock.json verification failed" }
+      - name: Install locked dependencies with watchdog
+        shell: pwsh
+        run: |
+          # NEXA_NPM_INSTALL_SUPERVISOR_V2
+          $ErrorActionPreference = "Stop"
+          $root = (Get-Location).Path
+          $logRoot = Join-Path $root "artifacts/npm-logs"
+          New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+          "started=$(Get-Date -Format o)" | Set-Content (Join-Path $logRoot "supervisor-started.txt") -Encoding UTF8
+          $env:npm_config_cache = Join-Path $root "artifacts/npm-cache"
+          $env:npm_config_audit = "false"
+          $env:npm_config_fund = "false"
+          $env:npm_config_update_notifier = "false"
+          $env:npm_config_fetch_retries = "4"
+          $env:npm_config_fetch_retry_factor = "2"
+          $env:npm_config_fetch_retry_mintimeout = "10000"
+          $env:npm_config_fetch_retry_maxtimeout = "60000"
+          $env:npm_config_loglevel = "verbose"
+          $env:ELECTRON_CACHE = Join-Path $root "artifacts/electron-cache"
+          $env:ELECTRON_GET_USE_PROXY = "1"
+          $env:DEBUG = "@electron/get*"
+          function Save-NexaNpmContext([string]$Destination) {
+            New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+            "node=$(node --version)" | Set-Content (Join-Path $Destination "runtime.txt") -Encoding UTF8
+            "npm=$(npm --version)" | Add-Content (Join-Path $Destination "runtime.txt") -Encoding UTF8
+            Copy-Item package.json,package-lock.json $Destination -Force -ErrorAction SilentlyContinue
+            $npmLogs = Join-Path $env:npm_config_cache "_logs"
+            if (Test-Path $npmLogs) { Copy-Item (Join-Path $npmLogs "*") $Destination -Force -ErrorAction SilentlyContinue }
+          }
+          function Invoke-NexaBoundedProcess([string]$Label,[string]$FilePath,[string[]]$Arguments,[int]$TimeoutSeconds,[string]$Destination) {
+            New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+            $stdout = Join-Path $Destination "$Label.stdout.log"
+            $stderr = Join-Path $Destination "$Label.stderr.log"
+            ($Arguments -join " ") | Set-Content (Join-Path $Destination "$Label.command.txt") -Encoding UTF8
+            $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -WorkingDirectory $root -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $started = Get-Date
+            $lastBytes = -1L
+            while (-not $process.HasExited) {
+              Start-Sleep -Seconds 30
+              $process.Refresh()
+              $elapsed = [int]((Get-Date) - $started).TotalSeconds
+              $bytes = 0L
+              if (Test-Path $stdout) { $bytes += (Get-Item $stdout).Length }
+              if (Test-Path $stderr) { $bytes += (Get-Item $stderr).Length }
+              Write-Host "Nexa dependency heartbeat: $Label elapsed=${elapsed}s log-bytes=$bytes"
+              if ($bytes -ne $lastBytes) {
+                if (Test-Path $stdout) { Get-Content $stdout -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
+                if (Test-Path $stderr) { Get-Content $stderr -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
+                $lastBytes = $bytes
+              }
+              if ($elapsed -ge $TimeoutSeconds -and -not $process.HasExited) {
+                "timeout_seconds=$TimeoutSeconds" | Set-Content (Join-Path $Destination "$Label.timeout.txt") -Encoding UTF8
+                & taskkill.exe /PID $process.Id /T /F | Out-Null
+                Start-Sleep -Seconds 2
+                return 124
+              }
+            }
+            $process.WaitForExit()
+            if (Test-Path $stdout) { Get-Content $stdout -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
+            if (Test-Path $stderr) { Get-Content $stderr -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ } }
+            return [int]$process.ExitCode
+          }
+          $success = $false
+          $attemptResults = @()
+          for ($attempt = 1; $attempt -le 2; $attempt++) {
+            $attemptDir = Join-Path $logRoot "attempt-$attempt"
+            New-Item -ItemType Directory -Force -Path $attemptDir | Out-Null
+            if ($attempt -gt 1) {
+              Remove-Item node_modules -Recurse -Force -ErrorAction SilentlyContinue
+              Remove-Item $env:npm_config_cache -Recurse -Force -ErrorAction SilentlyContinue
+              New-Item -ItemType Directory -Force -Path $env:npm_config_cache | Out-Null
+            }
+            Write-Host "Dependency attempt $attempt of 2: install package graph without lifecycle scripts."
+            $graphExit = Invoke-NexaBoundedProcess "npm-ci-graph" "npm.cmd" @("ci","--ignore-scripts","--no-audit","--no-fund","--prefer-online","--loglevel=verbose") 480 $attemptDir
+            $lifecycleExit = -1
+            if ($graphExit -eq 0) {
+              Write-Host "Dependency attempt $attempt of 2: run lifecycle scripts under watchdog."
+              $lifecycleExit = Invoke-NexaBoundedProcess "npm-rebuild-lifecycle" "npm.cmd" @("rebuild","--foreground-scripts","--loglevel=verbose") 480 $attemptDir
+            }
+            $electronExit = 0
+            if ($graphExit -eq 0 -and $lifecycleExit -eq 0 -and (Test-Path "node_modules/electron/install.js")) {
+              Write-Host "Dependency attempt $attempt of 2: prefetch Electron runtime under watchdog."
+              $electronExit = Invoke-NexaBoundedProcess "electron-runtime" "node.exe" @("node_modules/electron/install.js") 720 $attemptDir
+            }
+            Save-NexaNpmContext $attemptDir
+            $attemptResults += [ordered]@{ attempt=$attempt; graph_exit=$graphExit; lifecycle_exit=$lifecycleExit; electron_exit=$electronExit }
+            if ($graphExit -eq 0 -and $lifecycleExit -eq 0 -and $electronExit -eq 0) { $success = $true; break }
+            if ($attempt -lt 2) { Start-Sleep -Seconds 10 }
+          }
+          $attemptResults | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $logRoot "install-summary.json") -Encoding UTF8
+          if (-not $success) { throw "Dependency installation failed after two supervised attempts. Diagnostics were preserved before each timeout or exit." }
+      - name: Upload npm installation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexa-NPM-Diagnostics-${{ github.run_id }}
+          path: |
+            artifacts/npm-logs/**
+            artifacts/dependency-lock-portability.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Verify required validation commands
+        shell: pwsh
+        run: |
+          if (-not (Test-Path package.json)) { throw "package.json was not found" }
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $required = @("validate:delivery", "validate:project", "test", "ui:smoke")
+          foreach ($name in $required) {
+            $property = $package.scripts.PSObject.Properties[$name]
+            if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) { throw "package.json is missing required script: $name" }
+          }
+          $smoke = [string]$package.scripts.PSObject.Properties["ui:smoke"].Value
+          $match = [regex]::Match($smoke, '(?i)([A-Za-z0-9._/\\-]*ui[-_]?smoke[A-Za-z0-9._/\\-]*\.(?:js|mjs|cjs))')
+          if (-not $match.Success) { throw "ui:smoke does not reference a local JavaScript harness" }
+          $smokePath = $match.Groups[1].Value -replace '/', [IO.Path]::DirectorySeparatorChar
+          if (-not (Test-Path $smokePath)) { throw "Required UI smoke test is missing: $smokePath" }
+
+      # NEXA_VALIDATION_MATRIX_V2
+      - name: Verify required validation commands
+        shell: pwsh
+        run: |
+          if (-not (Test-Path package.json)) { throw "package.json was not found" }
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $required = @("validate:delivery", "validate:project", "test", "ui:smoke")
+          foreach ($name in $required) {
+            $property = $package.scripts.PSObject.Properties[$name]
+            if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) { throw "package.json is missing required script: $name" }
+          }
+          $smoke = [string]$package.scripts.PSObject.Properties["ui:smoke"].Value
+          $match = [regex]::Match($smoke, '(?i)([A-Za-z0-9._/\\-]*ui[-_]?smoke[A-Za-z0-9._/\\-]*\.(?:js|mjs|cjs))')
+          if (-not $match.Success) { throw "ui:smoke does not reference a local JavaScript harness" }
+          $smokePath = $match.Groups[1].Value -replace '/', [IO.Path]::DirectorySeparatorChar
+          if (-not (Test-Path $smokePath)) { throw "Required UI smoke test is missing: $smokePath" }
+
+      - name: Run delivery validator
+        id: nexa_delivery
+        continue-on-error: true
+        run: npm run validate:delivery
+
+      - name: Run internal application validator
+        id: nexa_internal
+        continue-on-error: true
+        run: npm run validate:project
+
+      - name: Run unit and acceptance tests
+        id: nexa_tests
+        continue-on-error: true
+        run: npm test
+
+      - name: Run Electron UI smoke test
+        id: nexa_ui_smoke
+        continue-on-error: true
+        run: npm run ui:smoke
+
+      - name: Validation gate
+        shell: pwsh
+        run: |
+          $checks = @(
+            [pscustomobject]@{ name = "Delivery validator"; outcome = "${{ steps.nexa_delivery.outcome }}" },
+            [pscustomobject]@{ name = "Internal validator"; outcome = "${{ steps.nexa_internal.outcome }}" },
+            [pscustomobject]@{ name = "Unit and acceptance tests"; outcome = "${{ steps.nexa_tests.outcome }}" },
+            [pscustomobject]@{ name = "Electron UI smoke"; outcome = "${{ steps.nexa_ui_smoke.outcome }}" }
+          )
+          $lines = @("Nexa validation matrix", "Commit: ${{ github.sha }}", "Run: ${{ github.run_id }}", "")
+          foreach ($check in $checks) { $lines += ("{0}: {1}" -f $check.name, $check.outcome) }
+          $lines | Set-Content nexa-validation-summary.txt -Encoding UTF8
+          $checks | ConvertTo-Json | Set-Content nexa-validation-summary.json -Encoding UTF8
+          Get-Content nexa-validation-summary.txt
+          $failed = @($checks | Where-Object { $_.outcome -ne "success" })
+          if ($failed.Count -gt 0) {
+            throw ("Validation failed in: " + (($failed | ForEach-Object { $_.name }) -join ", "))
+          }
+      # NEXA_WINDOWS_ARTIFACT_DELIVERY_V3
+      - name: Build installer and portable app
+        run: npm run build:win
+
+      - name: Normalize and validate Windows delivery
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $minimumBytes = 10MB
+          if (-not (Test-Path package.json)) { throw "package.json was not found" }
+          if (-not (Test-Path release)) { throw "electron-builder did not create the release directory" }
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = [string]$package.version
+          $productName = [string]$package.build.productName
+          if ([string]::IsNullOrWhiteSpace($productName)) { $productName = [string]$package.name }
+          $safeName = ($productName -replace '[^0-9A-Za-z._-]+', '-').Trim('-')
+          if ([string]::IsNullOrWhiteSpace($safeName)) { throw "Unable to derive a safe product name" }
+
+          function Assert-PeFile([System.IO.FileInfo]$File, [string]$Label) {
+            if ($null -eq $File -or -not $File.Exists) { throw "$Label EXE was not produced" }
+            if ($File.Length -lt $minimumBytes) { throw "$Label EXE is too small: $($File.Length) bytes" }
+            $stream = [System.IO.File]::OpenRead($File.FullName)
+            try { $first = $stream.ReadByte(); $second = $stream.ReadByte() } finally { $stream.Dispose() }
+            if ($first -ne 0x4D -or $second -ne 0x5A) { throw "$Label is not a Windows PE executable (missing MZ header): $($File.FullName)" }
+          }
+
+          $releaseExes = @(Get-ChildItem release -Recurse -File -Filter *.exe | Where-Object {
+            $_.FullName -notmatch '[\\/]win-unpacked[\\/]' -and $_.Name -notmatch '(?i)unins|uninstall'
+          })
+          $installerCandidates = @($releaseExes | Where-Object {
+            $_.Name -match '(?i)(setup|installer)' -and $_.Name -notmatch '(?i)portable'
+          } | Sort-Object Length -Descending)
+          if ($installerCandidates.Count -eq 0 -and (Test-Path release\latest.yml)) {
+            $latestText = Get-Content release\latest.yml -Raw
+            $latestMatch = [regex]::Match($latestText, '(?im)^\s*(?:path|url):\s*["'']?([^"''\r\n]+\.exe)["'']?\s*$')
+            if ($latestMatch.Success) {
+              $latestCandidate = Join-Path (Resolve-Path release) $latestMatch.Groups[1].Value
+              if (Test-Path $latestCandidate) { $installerCandidates = @(Get-Item $latestCandidate) }
+            }
+          }
+          if ($installerCandidates.Count -eq 0) {
+            $nonPortable = @($releaseExes | Where-Object { $_.Name -notmatch '(?i)portable' } | Sort-Object Length -Descending)
+            if ($nonPortable.Count -eq 1) { $installerCandidates = @($nonPortable[0]) }
+          }
+          $portableCandidates = @($releaseExes | Where-Object { $_.Name -match '(?i)portable' } | Sort-Object Length -Descending)
+          if ($installerCandidates.Count -eq 0) { throw "The real Windows Installer EXE was not found. Discovered EXEs: $($releaseExes.Name -join ', ')" }
+          if ($portableCandidates.Count -eq 0) { throw "The real Portable Windows EXE was not found. Discovered EXEs: $($releaseExes.Name -join ', ')" }
+
+          $installerSource = [System.IO.FileInfo]$installerCandidates[0]
+          $portableSource = [System.IO.FileInfo]$portableCandidates[0]
+          Assert-PeFile $installerSource "Installer"
+          Assert-PeFile $portableSource "Portable"
+
+          $deliveryDir = Join-Path (Resolve-Path release) 'delivery'
+          New-Item -ItemType Directory -Force -Path $deliveryDir | Out-Null
+          $installerName = "$safeName-Setup-$version-x64.exe"
+          $portableName = "$safeName-Portable-$version-x64.exe"
+          $zipName = "$safeName-$version-x64.zip"
+          $installerPath = Join-Path $deliveryDir $installerName
+          $portablePath = Join-Path $deliveryDir $portableName
+          $zipPath = Join-Path $deliveryDir $zipName
+
+          if ($installerSource.FullName -ne $installerPath) { Copy-Item $installerSource.FullName $installerPath -Force }
+          if ($portableSource.FullName -ne $portablePath) { Copy-Item $portableSource.FullName $portablePath -Force }
+          Assert-PeFile (Get-Item $installerPath) "Normalized Installer"
+          Assert-PeFile (Get-Item $portablePath) "Normalized Portable"
+
+          if (-not (Test-Path release\win-unpacked\resources\app.asar)) { throw "win-unpacked/resources/app.asar was not created" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory((Resolve-Path release\win-unpacked), $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          $zipFile = Get-Item $zipPath
+          if ($zipFile.Length -lt $minimumBytes) { throw "Windows ZIP is too small: $($zipFile.Length) bytes" }
+          $zipCheck = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $hasAsar = @($zipCheck.Entries | Where-Object { $_.FullName -match '(?i)(^|/)resources/app\.asar$' }).Count -gt 0
+            if (-not $hasAsar) { throw "Windows ZIP does not contain resources/app.asar" }
+          } finally { $zipCheck.Dispose() }
+
+          $sourceBlockmap = "$($installerSource.FullName).blockmap"
+          $normalizedBlockmap = "$installerPath.blockmap"
+          if (Test-Path $sourceBlockmap) { Copy-Item $sourceBlockmap $normalizedBlockmap -Force }
+
+          $installerRelative = "release/delivery/$installerName"
+          $portableRelative = "release/delivery/$portableName"
+          $zipRelative = "release/delivery/$zipName"
+          "NEXA_PRODUCT_SAFE=$safeName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NEXA_INSTALLER_NAME=$installerName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NEXA_PORTABLE_NAME=$portableName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NEXA_ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NEXA_INSTALLER_PATH=$installerRelative" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NEXA_PORTABLE_PATH=$portableRelative" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NEXA_ZIP_PATH=$zipRelative" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Installer source: $($installerSource.FullName)"
+          Write-Host "Installer exact: $installerRelative ($((Get-Item $installerPath).Length) bytes)"
+          Write-Host "Portable exact: $portableRelative ($((Get-Item $portablePath).Length) bytes)"
+          Write-Host "ZIP exact: $zipRelative ($($zipFile.Length) bytes)"
+
+      - name: Create exact build provenance manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $installer = Get-Item $env:NEXA_INSTALLER_PATH
+          $portable = Get-Item $env:NEXA_PORTABLE_PATH
+          $zip = Get-Item $env:NEXA_ZIP_PATH
+          $signature = Get-AuthenticodeSignature $installer.FullName
+          $mainPath = if ($package.main) { [string]$package.main } else { "main.js" }
+          $rendererPath = "src/index.html"
+          $manifest = [ordered]@{
+            schema = "nexa-windows-delivery-v3"
+            project_version = [string]$package.version
+            product_name = [string]$package.build.productName
+            package_name = [string]$package.name
+            build_id = "${{ inputs.nexa_build_id }}"
+            requested_version = "${{ inputs.nexa_version }}"
+            commit_sha = "${{ github.sha }}"
+            workflow_run_id = "${{ github.run_id }}"
+            generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+            installer = [ordered]@{
+              name = $installer.Name
+              path = $env:NEXA_INSTALLER_PATH
+              size_bytes = $installer.Length
+              sha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              pe_mz = $true
+              signature_status = [string]$signature.Status
+              signer = if ($signature.SignerCertificate) { [string]$signature.SignerCertificate.Subject } else { $null }
+            }
+            portable = [ordered]@{
+              name = $portable.Name
+              path = $env:NEXA_PORTABLE_PATH
+              size_bytes = $portable.Length
+              sha256 = (Get-FileHash $portable.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              pe_mz = $true
+            }
+            zip = [ordered]@{
+              name = $zip.Name
+              path = $env:NEXA_ZIP_PATH
+              size_bytes = $zip.Length
+              sha256 = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              contains_app_asar = $true
+            }
+            main_file = $mainPath
+            main_sha256 = if (Test-Path $mainPath) { (Get-FileHash $mainPath -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
+            renderer_file = $rendererPath
+            renderer_sha256 = if (Test-Path $rendererPath) { (Get-FileHash $rendererPath -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
+          }
+          $manifestPath = "release/delivery/nexa-build-manifest.json"
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content $manifestPath -Encoding UTF8
+          "NEXA_MANIFEST_PATH=$manifestPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Test Installer, Apps and Features, and uninstaller
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $started = (Get-Date).ToUniversalTime().ToString("o")
+          $result = "failure"
+          $failure = $null
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $productName = [string]$package.build.productName
+          if ([string]::IsNullOrWhiteSpace($productName)) { $productName = [string]$package.name }
+          $installer = (Resolve-Path $env:NEXA_INSTALLER_PATH).Path
+          $installDir = Join-Path $env:RUNNER_TEMP ("nexa-install-" + $env:GITHUB_RUN_ID)
+          $userDataDir = Join-Path $env:APPDATA $productName
+          $sentinel = Join-Path $userDataDir "nexa-uninstall-preserve-test.txt"
+          $reportPath = "release/delivery/nexa-installer-test-report.json"
+
+          function Wait-For([scriptblock]$Condition, [int]$Seconds, [string]$Message) {
+            $deadline = (Get-Date).AddSeconds($Seconds)
+            while ((Get-Date) -lt $deadline) {
+              if (& $Condition) { return }
+              Start-Sleep -Milliseconds 500
+            }
+            throw $Message
+          }
+          function Get-NexaUninstallEntries([string]$DisplayName) {
+            $roots = @(
+              'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+              'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+              'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+            )
+            $items = @()
+            foreach ($root in $roots) {
+              if (-not (Test-Path $root)) { continue }
+              foreach ($key in Get-ChildItem $root -ErrorAction SilentlyContinue) {
+                $value = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue
+                if ($null -ne $value -and ([string]$value.DisplayName -eq $DisplayName -or [string]$value.DisplayName -like "$DisplayName*")) {
+                  $items += $value
+                }
+              }
+            }
+            return @($items)
+          }
+          function Install-Nexa {
+            if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+            $process = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Installer exited with code $($process.ExitCode)" }
+            Wait-For { Test-Path (Join-Path $installDir 'resources\app.asar') } 60 "Installed resources/app.asar was not found"
+            $appExe = @(Get-ChildItem $installDir -Recurse -File -Filter *.exe | Where-Object { $_.Name -notmatch '(?i)unins|uninstall' } | Sort-Object Length -Descending)
+            if ($appExe.Count -eq 0) { throw "Installed application executable was not found" }
+            return $appExe[0]
+          }
+          function Uninstall-Nexa {
+            $uninstaller = @(Get-ChildItem $installDir -Recurse -File -Filter *.exe | Where-Object { $_.Name -match '(?i)unins|uninstall' } | Sort-Object Length -Descending | Select-Object -First 1)
+            if ($uninstaller.Count -eq 0) { throw "NSIS uninstaller executable was not found in the installed application" }
+            $process = Start-Process -FilePath $uninstaller[0].FullName -ArgumentList '/S' -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Uninstaller exited with code $($process.ExitCode)" }
+            Wait-For { -not (Test-Path (Join-Path $installDir 'resources\app.asar')) } 60 "Installed application files remained after uninstall"
+          }
+
+          try {
+            New-Item -ItemType Directory -Force -Path $userDataDir | Out-Null
+            Set-Content -Path $sentinel -Value "preserve-$env:GITHUB_RUN_ID" -Encoding UTF8
+            $firstExe = Install-Nexa
+            $entries = Get-NexaUninstallEntries $productName
+            if ($entries.Count -eq 0) { throw "Installer did not register Nexa in Windows Apps and Features" }
+            $uninstallString = [string]$entries[0].UninstallString
+            if ([string]::IsNullOrWhiteSpace($uninstallString)) { throw "Apps and Features entry has no UninstallString" }
+            $shortcutRoots = @(
+              [Environment]::GetFolderPath('Desktop'),
+              [Environment]::GetFolderPath('CommonDesktopDirectory'),
+              [Environment]::GetFolderPath('StartMenu'),
+              [Environment]::GetFolderPath('CommonStartMenu')
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path $_) }
+            $shortcuts = @()
+            foreach ($root in $shortcutRoots) {
+              $shortcuts += @(Get-ChildItem $root -Recurse -File -Filter *.lnk -ErrorAction SilentlyContinue | Where-Object {
+                $_.BaseName -eq $productName -or $_.BaseName -like "$productName*"
+              })
+            }
+            if ($shortcuts.Count -eq 0) { throw "Installer did not create a Desktop or Start Menu shortcut" }
+            Uninstall-Nexa
+            if (-not (Test-Path $sentinel)) { throw "Default uninstall deleted local user data; preservation is required" }
+            if ((Get-NexaUninstallEntries $productName).Count -ne 0) { throw "Apps and Features entry remained after uninstall" }
+            foreach ($shortcut in $shortcuts) {
+              if (Test-Path $shortcut.FullName) { throw "Shortcut remained after uninstall: $($shortcut.FullName)" }
+            }
+            $secondExe = Install-Nexa
+            if (-not $secondExe.Exists) { throw "Reinstall did not restore the application executable" }
+            if (-not (Test-Path $sentinel)) { throw "Reinstall did not preserve the local-data sentinel" }
+            if ((Get-NexaUninstallEntries $productName).Count -eq 0) { throw "Reinstall did not restore Apps and Features registration" }
+            Uninstall-Nexa
+            $result = "success"
+          } catch {
+            $failure = $_.Exception.Message
+            throw
+          } finally {
+            $report = [ordered]@{
+              result = $result
+              error = $failure
+              product_name = $productName
+              installer = $env:NEXA_INSTALLER_PATH
+              install_directory = $installDir
+              apps_and_features_checked = $true
+              uninstall_string_checked = $true
+              shortcuts_checked = $true
+              local_data_preserved_by_default = if (Test-Path $sentinel) { $true } else { $false }
+              reinstall_checked = $true
+              started_at_utc = $started
+              finished_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+            }
+            $report | ConvertTo-Json -Depth 6 | Set-Content $reportPath -Encoding UTF8
+            "NEXA_INSTALL_TEST_REPORT=$reportPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            if (Test-Path $userDataDir) { Remove-Item $userDataDir -Recurse -Force -ErrorAction SilentlyContinue }
+            if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Upload exact Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexa-Windows-Installer-${{ inputs.nexa_version }}-Build-${{ inputs.nexa_build_id }}
+          path: |
+            ${{ env.NEXA_INSTALLER_PATH }}
+            ${{ env.NEXA_MANIFEST_PATH }}
+            ${{ env.NEXA_INSTALL_TEST_REPORT }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload exact portable Windows app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexa-Windows-Portable-${{ inputs.nexa_version }}-Build-${{ inputs.nexa_build_id }}
+          path: |
+            ${{ env.NEXA_PORTABLE_PATH }}
+            ${{ env.NEXA_MANIFEST_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload exact Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexa-Windows-ZIP-${{ inputs.nexa_version }}-Build-${{ inputs.nexa_build_id }}
+          path: |
+            ${{ env.NEXA_ZIP_PATH }}
+            ${{ env.NEXA_MANIFEST_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexa-Windows-Diagnostics-${{ inputs.nexa_version }}-Build-${{ inputs.nexa_build_id }}
+          path: |
+            nexa-validation-summary.txt
+            nexa-validation-summary.json
+            nexa-build-manifest.json
+            release/builder-debug.yml
+            release/builder-effective-config.yaml
+            release/delivery/nexa-build-manifest.json
+            release/delivery/nexa-installer-test-report.json
+            release/delivery/*.exe
+            release/delivery/*.zip
+            release/latest.yml
+            release/**/*.blockmap
+            artifacts/ui-smoke-report.json
+            artifacts/ui-smoke-failure.txt
+          if-no-files-found: ignore
+          retention-days: 14
