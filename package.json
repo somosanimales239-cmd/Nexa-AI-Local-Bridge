@@ -1,7 +1,7 @@
 {
   "name": "nexa-ai-local-bridge",
-  "version": "1.1.0",
-  "description": "Secure Windows companion with read-only Hostinger command queue support for Nexa AI Computer Bridge.",
+  "version": "1.2.0",
+  "description": "Secure Windows companion for Nexa AI Computer Bridge with Hostinger heartbeat, policy synchronization, and read-only remote command execution.",
   "main": "main.js",
   "author": "Nexa",
   "license": "UNLICENSED",
@@ -14,8 +14,11 @@
     "build:mac": "npm run validate && electron-builder --mac dmg zip --publish never",
     "validate:delivery": "node scripts/validate-delivery.js",
     "validate:project": "node scripts/validate-project.js",
-    "test": "node --test scripts/*.test.js",
-    "ui:smoke": "electron scripts/ui-smoke.js"
+    "test": "npm run test:baseline && npm run test:implementation && npm run test:acceptance",
+    "ui:smoke": "electron scripts/ui-smoke.js",
+    "test:baseline": "node --test scripts/nexa-baseline.test.js",
+    "test:implementation": "node --test scripts/implementation.test.js",
+    "test:acceptance": "node --test scripts/acceptance.test.js"
   },
   "devDependencies": {
     "electron": "43.1.0",
@@ -105,7 +108,8 @@
       ],
       "category": "public.app-category.utilities",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
-    }
+    },
+    "asar": true
   },
   "engines": {
     "node": ">=24.0.0"

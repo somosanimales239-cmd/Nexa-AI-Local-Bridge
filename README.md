@@ -1,35 +1,30 @@
-# Nexa AI Local Bridge v1.1.0
+# Nexa AI Local Bridge 1.2.0
 
-Windows-side companion for **Nexa AI Computer Bridge Hostinger v2**.
+Windows companion for Nexa AI Computer Bridge on Hostinger.
 
-## v1.1.0
+## Runtime
 
-- Keeps the real HTTPS heartbeat/pairing connection from v1.0.0.
-- Reads the command endpoint advertised by Hostinger.
-- Polls the real Hostinger Command Queue every 5 seconds while connected.
-- Executes only the phase-1 read-only action allowlist.
-- Returns structured results/errors to Hostinger.
-- Adds local **Allowed Folders**. `list_directory` and `read_file` cannot leave these roots.
-- Adds a local Current Hostinger Command panel.
-- Preserves Emergency Stop, Bridge Enabled and Read Files policy gates.
-- Does not add arbitrary CMD, PowerShell, Python or file-writing execution.
+- Outbound HTTPS pairing to `api/agent.php`.
+- Encrypted pairing token through Electron `safeStorage`.
+- Heartbeat every 20 seconds with PC, Windows, local IPv4 and GPU information.
+- Hostinger policy synchronization for Bridge Enabled, Emergency Stop, Full Computer Mode and per-capability permissions.
+- Read-only Hostinger command queue support for computer status, drives, directory listings, text-file reads, process inventory, GPU status and CUDA status.
+- Local Allowed Folders policy for file-system reads.
+- System tray, reconnect, auto-connect and optional Start with Windows.
 
-## Phase-1 commands
+## Nexa App Builder Pro delivery contract
 
-- `computer_status`
-- `list_drives`
-- `list_directory`
-- `read_file` (text only, max 256 KiB)
-- `get_processes`
-- `get_gpu_status`
-- `get_cuda_status`
+Version 1.2.0 is packaged for the Windows target expected by Nexa App Builder Pro:
 
-## First end-to-end test
+- NSIS Installer
+- Portable EXE
+- Windows ZIP
+- ASAR enabled
+- delivery validator
+- project validator
+- baseline tests
+- implementation tests
+- acceptance tests
+- Electron UI smoke test
 
-1. Update Hostinger with `NEXA_AI_COMPUTER_BRIDGE_HOSTINGER_V2.zip`.
-2. Build/install this v1.1.0 project.
-3. Pair it to your existing Hostinger Agent Endpoint/token.
-4. Add `D:\\N3D` (or another test folder) to Allowed Folders and save local security.
-5. In Hostinger enable Read Files.
-6. Queue `list_directory` for the same folder.
-7. The result should return to the Hostinger Commands panel.
+The included Windows workflow is copied from the current Nexa App Builder Pro Windows workflow template so the project and the control panel use the same delivery contract.
