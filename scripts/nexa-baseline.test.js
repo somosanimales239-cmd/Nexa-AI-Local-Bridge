@@ -102,3 +102,23 @@ test('local logger redacts bearer and Nexa pairing token patterns', () => {
 test('Start with Windows defaults off in an unconfigured installation', () => {
   assert.match(secureConfigSource, /startWithWindows:\s*raw\.startWithWindows\s*===\s*true/);
 });
+
+
+test('read-only command queue client and executor are present without arbitrary shell execution', () => {
+  const client = fs.readFileSync(path.join(root, 'src/services/bridge-client.js'), 'utf8');
+  const executor = fs.readFileSync(path.join(root, 'src/services/read-only-executor.js'), 'utf8');
+  assert.match(client, /pollCommand/);
+  assert.match(client, /submitCommandResult/);
+  assert.match(executor, /list_directory/);
+  assert.match(executor, /read_file/);
+  assert.match(executor, /Blocked by local Allowed Folders policy/);
+  assert.doesNotMatch(executor, /exec\s*\(/);
+  assert.doesNotMatch(executor, /shell\s*:\s*true/);
+});
+
+test('renderer exposes Allowed Folders and remote queue state', () => {
+  const html = fs.readFileSync(path.join(root, 'src/index.html'), 'utf8');
+  assert.match(html, /Allowed Folders/i);
+  assert.match(html, /Current Hostinger command/i);
+  assert.match(rendererSource, /allowedRoots/);
+});

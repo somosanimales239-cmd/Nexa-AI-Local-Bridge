@@ -9,9 +9,15 @@ const { SecureConfig } = require('./src/services/secure-config');
 const { SafeLogger } = require('./src/services/logger');
 const { collectSystemInfo } = require('./src/services/system-info');
 const { BridgePolicy } = require('./src/services/policy');
-const { validateEndpoint, sendHeartbeat, sendServerLog } = require('./src/services/bridge-client');
+const {
+  validateEndpoint, deriveCommandEndpoint, pollCommand,
+  submitCommandResult, submitCommandError, submitCommandCancelled,
+  sendHeartbeat, sendServerLog
+} = require('./src/services/bridge-client');
+const { executeReadOnlyCommand } = require('./src/services/read-only-executor');
 
 const HEARTBEAT_MS = 20_000;
+const COMMAND_POLL_MS = 5_000;
 const RETRY_DELAYS = [2_000, 5_000, 10_000, 20_000, 30_000];
 
 let mainWindow = null;
@@ -19,6 +25,8 @@ let tray = null;
 let configStore = null;
 let logger = null;
 let heartbeatTimer = null;
+let commandTimer = null;
+let commandBusy = false;
 let retryIndex = 0;
 let systemInfo = null;
 let quitting = false;
@@ -42,6 +50,9 @@ const state = {
   autoConnect: false,
   startWithWindows: false,
   paired: false,
+  allowedRoots: [],
+  commandEndpoint: '',
+  currentCommand: null,
   policy: policy.snapshot(),
   activity,
 };
@@ -73,6 +84,7 @@ function updateConfigState() {
   state.autoConnect = cfg.autoConnect;
   state.startWithWindows = cfg.startWithWindows;
   state.paired = cfg.paired;
+  state.allowedRoots = Array.isArray(cfg.allowedRoots) ? cfg.allowedRoots : [];
   if (!cfg.paired && !state.connected) state.status = 'unpaired';
 }
 
@@ -81,6 +93,7 @@ function applyPolicy(serverState) {
   policy.applyServerState(serverState);
   state.policy = policy.snapshot();
   state.serverTime = serverState.server_time || '';
+  if (serverState.command_endpoint) state.commandEndpoint = serverState.command_endpoint;
 
   if (before.emergencyStop !== state.policy.emergencyStop) {
     safeActivity(
@@ -100,6 +113,22 @@ function applyPolicy(serverState) {
 function stopTimer() {
   if (heartbeatTimer) clearTimeout(heartbeatTimer);
   heartbeatTimer = null;
+}
+
+function stopCommandTimer() {
+  if (commandTimer) clearTimeout(commandTimer);
+  commandTimer = null;
+}
+
+function scheduleCommandPoll(delayMs = COMMAND_POLL_MS) {
+  stopCommandTimer();
+  if (!state.paired || !state.connected) return;
+  commandTimer = setTimeout(() => {
+    commandCycle().catch(error => {
+      safeActivity('warning', 'command-queue', `Command polling error: ${error.message}`);
+      scheduleCommandPoll(10_000);
+    });
+  }, delayMs);
 }
 
 function scheduleHeartbeat(delayMs) {
@@ -131,6 +160,7 @@ async function heartbeatOnce({ endpoint, token }) {
   state.gpu = systemInfo.gpu;
   retryIndex = 0;
   broadcastState();
+  if (!commandTimer && !commandBusy) scheduleCommandPoll(1000);
   return response;
 }
 
@@ -190,6 +220,7 @@ async function connectInternal(payload, savePairing) {
       token,
       autoConnect: payload?.autoConnect === undefined ? current.autoConnect : payload.autoConnect === true,
       startWithWindows: payload?.startWithWindows === undefined ? current.startWithWindows : payload.startWithWindows === true,
+      allowedRoots: Array.isArray(payload?.allowedRoots) ? payload.allowedRoots : current.allowedRoots,
     });
     updateConfigState();
     applyLoginPreference(state.startWithWindows);
@@ -202,8 +233,63 @@ async function connectInternal(payload, savePairing) {
   return { ok: true, response, state: publicState() };
 }
 
+
+async function commandCycle() {
+  stopCommandTimer();
+  if (commandBusy || !state.paired || !state.connected) return;
+  if (!policy.canExecute('read_files')) {
+    scheduleCommandPoll(COMMAND_POLL_MS);
+    return;
+  }
+
+  let nextPollDelay = COMMAND_POLL_MS;
+  commandBusy = true;
+  try {
+    const cfg = configStore.publicConfig();
+    const token = configStore.getToken();
+    const endpoint = state.commandEndpoint || deriveCommandEndpoint(cfg.endpoint);
+    const polled = await pollCommand(endpoint, token);
+    const command = polled.command;
+    if (!command) return;
+    nextPollDelay = 1000;
+
+    state.currentCommand = { uuid: command.uuid, action: command.action, status: 'running' };
+    safeActivity('info', 'command', `Running read-only command ${command.action} (${command.uuid}).`);
+    broadcastState();
+
+    if (command.cancel_requested) {
+      await submitCommandCancelled(endpoint, token, command.uuid);
+      safeActivity('warning', 'command', `Command cancelled before execution (${command.uuid}).`);
+      return;
+    }
+
+    try {
+      const result = await executeReadOnlyCommand(command, {
+        policy,
+        systemInfo,
+        allowedRoots: configStore.publicConfig().allowedRoots,
+      });
+      if (result && result.cancelled) {
+        await submitCommandCancelled(endpoint, token, command.uuid);
+      } else {
+        await submitCommandResult(endpoint, token, command.uuid, result);
+      }
+      safeActivity('info', 'command', `Command completed: ${command.action} (${command.uuid}).`);
+    } catch (error) {
+      await submitCommandError(endpoint, token, command.uuid, error.message);
+      safeActivity('warning', 'command', `Command failed: ${command.action}: ${error.message}`);
+    }
+  } finally {
+    state.currentCommand = null;
+    commandBusy = false;
+    broadcastState();
+    scheduleCommandPoll(nextPollDelay);
+  }
+}
+
 function disconnectInternal() {
   stopTimer();
+  stopCommandTimer();
   policy.markDisconnected();
   state.policy = policy.snapshot();
   state.connected = false;
@@ -290,7 +376,7 @@ function refreshTray() {
     }},
     { label: 'Disconnect', enabled: state.connected, click: () => disconnectInternal() },
     { type: 'separator' },
-    { label: 'Quit', click: () => { quitting = true; stopTimer(); app.quit(); } },
+    { label: 'Quit', click: () => { quitting = true; stopTimer(); stopCommandTimer(); app.quit(); } },
   ]));
 }
 
@@ -348,6 +434,7 @@ ipcMain.handle('bridge:update-preferences', (_event, payload) => {
   const next = configStore.updatePreferences({
     autoConnect: payload?.autoConnect,
     startWithWindows: payload?.startWithWindows,
+    allowedRoots: Array.isArray(payload?.allowedRoots) ? payload.allowedRoots : undefined,
   });
   updateConfigState();
   applyLoginPreference(next.startWithWindows);
@@ -363,6 +450,9 @@ ipcMain.handle('bridge:unpair', () => {
   updateConfigState();
   state.endpoint = '';
   state.deviceLabel = '';
+  state.allowedRoots = [];
+  state.commandEndpoint = '';
+  state.currentCommand = null;
   state.status = 'unpaired';
   state.statusMessage = 'Pairing removed from this PC.';
   safeActivity('warning', 'pairing', 'This PC was unpaired and the stored token was cleared.');
@@ -405,6 +495,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   quitting = true;
   stopTimer();
+  stopCommandTimer();
 });
 
 app.on('window-all-closed', () => {

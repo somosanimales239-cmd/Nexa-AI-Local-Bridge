@@ -43,6 +43,7 @@ function validateHeartbeatResponse(data) {
     emergency_stop: data.emergency_stop,
     full_computer_mode: data.full_computer_mode,
     permissions,
+    command_endpoint: typeof data.command_endpoint === 'string' ? data.command_endpoint : '',
     server_time: typeof data.server_time === 'string' ? data.server_time : '',
   };
 }
@@ -117,10 +118,58 @@ async function sendServerLog(endpoint, token, level, message) {
   return true;
 }
 
+
+function deriveCommandEndpoint(agentEndpoint) {
+  const url = new URL(validateEndpoint(agentEndpoint));
+  if (/\/agent\.php$/i.test(url.pathname)) {
+    url.pathname = url.pathname.replace(/agent\.php$/i, 'commands.php');
+  } else {
+    url.pathname = url.pathname.replace(/\/$/, '') + '/commands.php';
+  }
+  return url.toString();
+}
+
+async function pollCommand(commandEndpoint, token) {
+  const endpoint = validateEndpoint(commandEndpoint);
+  const data = await postJson(endpoint, token, { action: 'poll' }, 9000);
+  if (!data || data.ok !== true) throw new Error('Hostinger command queue returned an invalid response.');
+  if (data.command !== null && data.command !== undefined) {
+    const command = data.command;
+    if (!command || typeof command !== 'object') throw new Error('Hostinger returned a malformed command.');
+    if (typeof command.uuid !== 'string' || typeof command.action !== 'string' || typeof command.capability !== 'string') {
+      throw new Error('Hostinger command is missing required fields.');
+    }
+    if (command.args !== undefined && (command.args === null || typeof command.args !== 'object' || Array.isArray(command.args))) {
+      throw new Error('Hostinger command args are invalid.');
+    }
+  }
+  return data;
+}
+
+async function submitCommandResult(commandEndpoint, token, uuid, result) {
+  const endpoint = validateEndpoint(commandEndpoint);
+  return postJson(endpoint, token, { action: 'result', uuid, result }, 12000);
+}
+
+async function submitCommandError(commandEndpoint, token, uuid, error) {
+  const endpoint = validateEndpoint(commandEndpoint);
+  return postJson(endpoint, token, { action: 'error', uuid, error: String(error || 'Command failed').slice(0, 4000) }, 12000);
+}
+
+async function submitCommandCancelled(commandEndpoint, token, uuid) {
+  const endpoint = validateEndpoint(commandEndpoint);
+  return postJson(endpoint, token, { action: 'cancelled', uuid }, 12000);
+}
+
 module.exports = {
   PERMISSION_KEYS,
   validateEndpoint,
   validateHeartbeatResponse,
+  deriveCommandEndpoint,
+  pollCommand,
+  submitCommandResult,
+  submitCommandError,
+  submitCommandCancelled,
   sendHeartbeat,
   sendServerLog,
 };

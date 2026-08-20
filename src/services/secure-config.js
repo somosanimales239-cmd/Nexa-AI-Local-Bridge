@@ -24,6 +24,7 @@ class SecureConfig {
       deviceLabel: typeof raw.deviceLabel === 'string' ? raw.deviceLabel : '',
       autoConnect: raw.autoConnect === true,
       startWithWindows: raw.startWithWindows === true,
+      allowedRoots: Array.isArray(raw.allowedRoots) ? raw.allowedRoots.filter(v => typeof v === 'string') : [],
       paired: typeof raw.tokenEncrypted === 'string' && raw.tokenEncrypted.length > 0,
     };
   }
@@ -42,7 +43,7 @@ class SecureConfig {
     }
   }
 
-  savePairing({ endpoint, deviceLabel, token, autoConnect, startWithWindows }) {
+  savePairing({ endpoint, deviceLabel, token, autoConnect, startWithWindows, allowedRoots }) {
     if (!this.safeStorage.isEncryptionAvailable()) {
       throw new Error('Secure token storage is unavailable. The pairing token was not saved.');
     }
@@ -53,6 +54,7 @@ class SecureConfig {
       tokenEncrypted: encrypted,
       autoConnect: autoConnect === true,
       startWithWindows: startWithWindows === true,
+      allowedRoots: Array.isArray(allowedRoots) ? allowedRoots : [],
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -64,6 +66,9 @@ class SecureConfig {
       ...raw,
       autoConnect: patch.autoConnect === undefined ? raw.autoConnect === true : patch.autoConnect === true,
       startWithWindows: patch.startWithWindows === undefined ? raw.startWithWindows === true : patch.startWithWindows === true,
+      allowedRoots: patch.allowedRoots === undefined
+        ? (Array.isArray(raw.allowedRoots) ? raw.allowedRoots : [])
+        : (Array.isArray(patch.allowedRoots) ? patch.allowedRoots : []),
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });

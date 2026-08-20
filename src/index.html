@@ -52,6 +52,11 @@
               <span>Device Label</span>
               <input id="deviceLabel" type="text" maxlength="100" value="Main Windows PC">
             </label>
+            <label class="field full">
+              <span>Allowed Folders · one Windows folder per line</span>
+              <textarea id="allowedRoots" rows="3" spellcheck="false" placeholder="D:\N3D&#10;D:\TowConnect"></textarea>
+              <small>list_directory and read_file are blocked outside these local roots, even when Hostinger Read Files is ON.</small>
+            </label>
             <div class="field actions-field">
               <span>Connection actions</span>
               <div class="button-row">
@@ -77,6 +82,14 @@
             </div>
           </div>
           <div id="permissionGrid" class="permissions" data-testid="permissions"></div>
+        </article>
+
+        <article class="card queue-card">
+          <div class="section-heading compact">
+            <div><span class="eyebrow">REMOTE QUEUE · READ ONLY</span><h2>Current Hostinger command</h2><p>Phase 1 supports status, drives, directories, text files, processes, GPU and CUDA diagnostics.</p></div>
+            <span id="queueBadge" class="chip blocked">Idle</span>
+          </div>
+          <div id="currentCommand" class="current-command empty">No remote command is running.</div>
         </article>
 
         <article class="card">
@@ -115,6 +128,7 @@
             </label>
           </div>
           <div class="stack-buttons">
+            <button id="saveLocalBtn" class="btn secondary" type="button">Save local security</button>
             <button id="disconnectBtn" class="btn secondary" type="button" data-testid="disconnect">Disconnect</button>
             <button id="unpairBtn" class="btn danger" type="button" data-testid="unpair">Unpair this PC</button>
           </div>
@@ -123,7 +137,7 @@
         <article class="card future-card">
           <span class="eyebrow">NEXT LAYER</span>
           <h2>ChatGPT / MCP</h2>
-          <p>This v1 creates the real secure PC ↔ Hostinger connection. AI command execution will be attached to this bridge in the next controlled layer.</p>
+          <p>v1.1 adds the real read-only Hostinger command queue. Arbitrary write/CMD/PowerShell/Python execution is still intentionally disabled until the next controlled update.</p>
         </article>
       </aside>
     </section>

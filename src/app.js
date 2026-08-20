@@ -19,7 +19,8 @@ const els = {
   gpu: $('#gpu'), localIp: $('#localIp'), lastHeartbeat: $('#lastHeartbeat'),
   serverTime: $('#serverTime'), autoConnect: $('#autoConnect'),
   startWithWindows: $('#startWithWindows'), activity: $('#activity'),
-  openLogsBtn: $('#openLogsBtn'),
+  openLogsBtn: $('#openLogsBtn'), allowedRoots: $('#allowedRoots'), saveLocalBtn: $('#saveLocalBtn'),
+  queueBadge: $('#queueBadge'), currentCommand: $('#currentCommand'),
 };
 
 let latestState = null;
@@ -93,6 +94,7 @@ function render(state) {
   if (!formTouched) {
     els.endpoint.value = state.endpoint || '';
     els.deviceLabel.value = state.deviceLabel || 'Main Windows PC';
+    els.allowedRoots.value = Array.isArray(state.allowedRoots) ? state.allowedRoots.join('\n') : '';
   }
 
   els.autoConnect.checked = state.autoConnect === true;
@@ -105,6 +107,14 @@ function render(state) {
   els.disconnectBtn.disabled = !state.connected;
   els.reconnectBtn.disabled = !state.paired;
   els.unpairBtn.disabled = !state.paired;
+
+  const current = state.currentCommand;
+  els.queueBadge.textContent = current ? 'Running' : 'Idle';
+  els.queueBadge.className = `chip ${current ? 'warning' : 'blocked'}`;
+  els.currentCommand.className = `current-command ${current ? '' : 'empty'}`;
+  els.currentCommand.innerHTML = current
+    ? `<strong>${text(current.action)}</strong><code>${text(current.uuid)}</code><span>${text(current.status || 'running')}</span>`
+    : 'No remote command is running.';
 }
 
 function payload() {
@@ -114,6 +124,7 @@ function payload() {
     deviceLabel: els.deviceLabel.value.trim() || 'Main Windows PC',
     autoConnect: els.autoConnect.checked,
     startWithWindows: els.startWithWindows.checked,
+    allowedRoots: els.allowedRoots.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
   };
 }
 
@@ -133,6 +144,7 @@ async function withBusy(button, fn) {
 
 els.endpoint.addEventListener('input', () => { formTouched = true; });
 els.deviceLabel.addEventListener('input', () => { formTouched = true; });
+els.allowedRoots.addEventListener('input', () => { formTouched = true; });
 
 els.testBtn.addEventListener('click', () => withBusy(els.testBtn, async () => {
   const result = await window.nexaBridge.testConnection(payload());
@@ -172,10 +184,16 @@ async function savePreferences() {
   await window.nexaBridge.updatePreferences({
     autoConnect: els.autoConnect.checked,
     startWithWindows: els.startWithWindows.checked,
+    allowedRoots: els.allowedRoots.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
   });
 }
 els.autoConnect.addEventListener('change', savePreferences);
 els.startWithWindows.addEventListener('change', savePreferences);
+els.saveLocalBtn.addEventListener('click', async () => {
+  await savePreferences();
+  formTouched = false;
+  showTest('Local Allowed Folders and preferences saved.', true);
+});
 els.openLogsBtn.addEventListener('click', () => window.nexaBridge.openLogs());
 
 window.nexaBridge.onState(render);
