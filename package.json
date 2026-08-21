@@ -1,7 +1,7 @@
 {
   "name": "nexa-ai-local-bridge",
-  "version": "1.2.1",
-  "description": "Secure Windows companion for Nexa AI Computer Bridge with Hostinger-safe HTTP/1.1 transport, heartbeat, policy synchronization, and read-only remote command execution.",
+  "version": "1.2.2",
+  "description": "Secure Windows companion for Nexa AI Computer Bridge with resilient Hostinger HTTPS transport, Windows curl fallback, heartbeat, policy synchronization, and read-only remote command execution.",
   "main": "main.js",
   "author": "Nexa",
   "license": "UNLICENSED",

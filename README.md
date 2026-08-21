@@ -1,7 +1,7 @@
-# Nexa AI Local Bridge 1.2.1
+# Nexa AI Local Bridge 1.2.2
 
 
-## 1.2.1 Windows / Hostinger connectivity fix
+## 1.2.2 Windows DNS resilience fix
 
 - Replaces the Electron/Node `fetch()` bridge transport with deterministic native HTTP/1.1 requests.
 - Forces IPv4 for production HTTPS endpoints to match the Windows connectivity path validated with `curl.exe --http1.1`.
@@ -24,7 +24,7 @@ Windows companion for Nexa AI Computer Bridge on Hostinger.
 
 ## Nexa App Builder Pro delivery contract
 
-Version 1.2.1 is packaged for the Windows target expected by Nexa App Builder Pro:
+Version 1.2.2 is packaged for the Windows target expected by Nexa App Builder Pro:
 
 - NSIS Installer
 - Portable EXE

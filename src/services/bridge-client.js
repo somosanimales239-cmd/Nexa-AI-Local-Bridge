@@ -3,6 +3,7 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const { spawn } = require('child_process');
 
 const PERMISSION_KEYS = [
   'read_files','write_files','cmd','powershell','python',
@@ -100,13 +101,12 @@ function requestJsonHttp11(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT
       port: url.port || (isHttps ? 443 : 80),
       path: `${url.pathname}${url.search}`,
       method: 'POST',
-      family: isHttps ? 4 : undefined,
       agent: false,
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'User-Agent': 'Nexa-AI-Local-Bridge/1.2.1',
+        'User-Agent': 'Nexa-AI-Local-Bridge/1.2.2',
         'Content-Length': Buffer.byteLength(body),
         'Connection': 'close',
         'Cache-Control': 'no-cache',
@@ -115,6 +115,8 @@ function requestJsonHttp11(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT
         servername: url.hostname,
         ALPNProtocols: ['http/1.1'],
         minVersion: 'TLSv1.2',
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 250,
       } : {}),
     };
 
@@ -167,8 +169,149 @@ function requestJsonHttp11(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT
   });
 }
 
+
+const curlPreferredHosts = new Set();
+
+function quoteCurlConfigValue(value) {
+  return `"${String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')}"`;
+}
+
+function shouldUseCurlFallback(error, endpoint) {
+  if (process.platform !== 'win32') return false;
+  let url;
+  try { url = new URL(endpoint); } catch { return false; }
+  if (url.protocol !== 'https:') return false;
+  const code = String(error?.code || '').toUpperCase();
+  return ['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'NEXA_TIMEOUT'].includes(code);
+}
+
+/**
+ * Windows fallback using the inbox curl.exe client.
+ * The bearer token and JSON body are passed through curl config on stdin,
+ * not on the process command line, so secrets do not appear in argv.
+ */
+function requestJsonWithWindowsCurl(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const cleanEndpoint = validateEndpoint(endpoint);
+    const body = JSON.stringify(payload);
+    const maxSeconds = Math.max(5, Math.ceil(timeoutMs / 1000));
+    const connectSeconds = Math.min(10, maxSeconds);
+    const statusMarker = 'NEXA_HTTP_STATUS:';
+    const config = [
+      `url = ${quoteCurlConfigValue(cleanEndpoint)}`,
+      'request = "POST"',
+      'http1.1',
+      'silent',
+      'show-error',
+      'location',
+      'max-redirs = 3',
+      `connect-timeout = ${connectSeconds}`,
+      `max-time = ${maxSeconds}`,
+      `header = ${quoteCurlConfigValue(`Authorization: Bearer ${token}`)}`,
+      `header = ${quoteCurlConfigValue('Content-Type: application/json')}`,
+      `header = ${quoteCurlConfigValue('Accept: application/json')}`,
+      `header = ${quoteCurlConfigValue('User-Agent: Nexa-AI-Local-Bridge/1.2.2')}`,
+      `header = ${quoteCurlConfigValue('Connection: close')}`,
+      `data-binary = ${quoteCurlConfigValue(body)}`,
+      `write-out = ${quoteCurlConfigValue(`\\n${statusMarker}%{http_code}`)}`,
+      '',
+    ].join('\n');
+
+    const child = spawn('curl.exe', ['--config', '-'], {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const stdout = [];
+    const stderr = [];
+    let stdoutBytes = 0;
+    let settled = false;
+
+    const finishReject = error => {
+      if (settled) return;
+      settled = true;
+      reject(friendlyNetworkError(error, endpoint));
+    };
+
+    const hardTimer = setTimeout(() => {
+      const error = new Error(`curl.exe timed out after ${timeoutMs} ms`);
+      error.code = 'NEXA_TIMEOUT';
+      try { child.kill(); } catch {}
+      finishReject(error);
+    }, timeoutMs + 2500);
+
+    child.stdout.on('data', chunk => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > MAX_RESPONSE_BYTES + 8192) {
+        const error = new Error('Hostinger response exceeded the safe JSON response limit.');
+        error.code = 'RESPONSE_TOO_LARGE';
+        try { child.kill(); } catch {}
+        finishReject(error);
+        return;
+      }
+      stdout.push(chunk);
+    });
+    child.stderr.on('data', chunk => stderr.push(chunk));
+    child.on('error', error => {
+      clearTimeout(hardTimer);
+      if (error && error.code === 'ENOENT') {
+        const wrapped = new Error('Windows curl.exe is unavailable and the Node HTTPS connection also failed.');
+        wrapped.code = 'CURL_UNAVAILABLE';
+        finishReject(wrapped);
+        return;
+      }
+      finishReject(error);
+    });
+    child.on('close', code => {
+      clearTimeout(hardTimer);
+      if (settled) return;
+      const output = Buffer.concat(stdout).toString('utf8');
+      const markerIndex = output.lastIndexOf(`\n${statusMarker}`);
+      const errorText = Buffer.concat(stderr).toString('utf8').trim();
+      if (markerIndex < 0) {
+        const error = new Error(errorText || `curl.exe exited with code ${code}.`);
+        error.code = code === 6 ? 'ENOTFOUND' : code === 28 ? 'NEXA_TIMEOUT' : code === 35 ? 'TLS_ERROR' : 'CURL_ERROR';
+        finishReject(error);
+        return;
+      }
+      const text = output.slice(0, markerIndex);
+      const status = Number(output.slice(markerIndex + 1 + statusMarker.length).trim());
+      if (!Number.isFinite(status) || status <= 0) {
+        const error = new Error(errorText || 'curl.exe did not return an HTTP status.');
+        error.code = 'CURL_ERROR';
+        finishReject(error);
+        return;
+      }
+      settled = true;
+      resolve({ status, headers: {}, text, transport: 'windows-curl' });
+    });
+
+    child.stdin.on('error', () => {});
+    child.stdin.end(config);
+  });
+}
+
+async function requestJsonResilient(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const host = (() => { try { return new URL(endpoint).hostname; } catch { return ''; } })();
+  if (host && curlPreferredHosts.has(host) && process.platform === 'win32') {
+    return requestJsonWithWindowsCurl(endpoint, token, payload, timeoutMs);
+  }
+  try {
+    return await requestJsonHttp11(endpoint, token, payload, Math.min(timeoutMs, 12_000));
+  } catch (error) {
+    if (!shouldUseCurlFallback(error, endpoint)) throw error;
+    const response = await requestJsonWithWindowsCurl(endpoint, token, payload, timeoutMs);
+    if (host) curlPreferredHosts.add(host);
+    return response;
+  }
+}
+
 async function postJson(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const response = await requestJsonHttp11(endpoint, token, payload, timeoutMs);
+  const response = await requestJsonResilient(endpoint, token, payload, timeoutMs);
 
   let data = null;
   if (response.text) {
@@ -259,6 +402,8 @@ module.exports = {
   validateEndpoint,
   validateHeartbeatResponse,
   requestJsonHttp11,
+  requestJsonWithWindowsCurl,
+  requestJsonResilient,
   postJson,
   deriveCommandEndpoint,
   pollCommand,

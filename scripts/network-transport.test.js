@@ -27,7 +27,7 @@ test('HTTP/1.1 transport posts JSON and bearer token without fetch', async () =>
     req.on('end', () => {
       assert.equal(req.method, 'POST');
       assert.equal(req.headers.authorization, 'Bearer nexa_test');
-      assert.match(String(req.headers['user-agent']), /Nexa-AI-Local-Bridge\/1\.2\.1/);
+      assert.match(String(req.headers['user-agent']), /Nexa-AI-Local-Bridge\/1\.2\.2/);
       assert.equal(req.headers.connection, 'close');
       assert.deepEqual(JSON.parse(body), { action: 'heartbeat' });
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -64,4 +64,20 @@ test('HTTP/1.1 transport reports deterministic timeout diagnostics', async () =>
       error => error && /timed out/i.test(error.message)
     );
   });
+});
+
+
+test('production HTTPS transport no longer forces IPv4-only DNS lookup', () => {
+  const fs = require('fs');
+  const source = fs.readFileSync(require.resolve('../src/services/bridge-client'), 'utf8');
+  assert.doesNotMatch(source, /family:\s*isHttps\s*\?\s*4/);
+  assert.match(source, /autoSelectFamily:\s*true/);
+});
+
+test('Windows transport includes curl.exe HTTP\/1.1 fallback without bearer token in argv', () => {
+  const fs = require('fs');
+  const source = fs.readFileSync(require.resolve('../src/services/bridge-client'), 'utf8');
+  assert.match(source, /spawn\('curl\.exe',\s*\['--config',\s*'-'\]/);
+  assert.match(source, /Authorization: Bearer \$\{token\}/);
+  assert.match(source, /child\.stdin\.end\(config\)/);
 });
