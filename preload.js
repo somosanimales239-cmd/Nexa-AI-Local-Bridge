@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('nexaBridge', Object.freeze({
   updatePreferences: payload => ipcRenderer.invoke('bridge:update-preferences', payload),
   unpair: () => ipcRenderer.invoke('bridge:unpair'),
   openLogs: () => ipcRenderer.invoke('bridge:open-logs'),
+  syncWorkspaceNow: () => ipcRenderer.invoke('bridge:workspace-sync-now'),
+  installUnityIntegration: root => ipcRenderer.invoke('bridge:unity-install', root),
+  captureUnityViews: root => ipcRenderer.invoke('bridge:unity-capture', root),
   onState: callback => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, state) => callback(state);

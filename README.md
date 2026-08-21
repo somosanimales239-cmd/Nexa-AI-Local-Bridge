@@ -1,40 +1,40 @@
-# Nexa AI Local Bridge 1.2.2
-
-
-## 1.2.2 Windows DNS resilience fix
-
-- Replaces the Electron/Node `fetch()` bridge transport with deterministic native HTTP/1.1 requests.
-- Forces IPv4 for production HTTPS endpoints to match the Windows connectivity path validated with `curl.exe --http1.1`.
-- Uses `Connection: close` and disables connection reuse for Hostinger CDN compatibility.
-- Raises heartbeat/queue timeouts from 9 seconds to 20 seconds (25 seconds for command result submission).
-- Reports DNS, reset, refused, timeout, and TLS failures separately instead of a generic timeout.
-
+# Nexa AI Local Bridge 1.3.0
 
 Windows companion for Nexa AI Computer Bridge on Hostinger.
 
-## Runtime
+## Remote Unity Workspace
 
-- Outbound HTTPS pairing to `api/agent.php`.
-- Encrypted pairing token through Electron `safeStorage`.
-- Heartbeat every 20 seconds with PC, Windows, local IPv4 and GPU information.
-- Hostinger policy synchronization for Bridge Enabled, Emergency Stop, Full Computer Mode and per-capability permissions.
-- Read-only Hostinger command queue support for computer status, drives, directory listings, text-file reads, process inventory, GPU status and CUDA status.
-- Local Allowed Folders policy for file-system reads.
-- System tray, reconnect, auto-connect and optional Start with Windows.
+Version 1.3.0 adds an explicitly authorized Unity project mirror so a secret public Hostinger URL can be inspected from a ChatGPT Plus conversation without MCP.
 
-## Nexa App Builder Pro delivery contract
+Mirrored information includes:
+- complete relevant Unity project structure (Assets, Packages, ProjectSettings and other project files; cache folders such as Library/Temp are excluded)
+- C# scripts
+- .unity scenes
+- prefabs
+- shaders / shader graphs / HLSL / compute shaders
+- materials
+- JSON, YAML, XML, asmdef, input actions and project settings
+- Unity Editor log tail
+- compilation errors
+- Play Mode / compilation / active-scene state
+- Scene View and Game View PNG captures through the optional Nexa Unity Editor integration
+- metadata for binary assets such as textures, audio and 3D models
 
-Version 1.2.2 is packaged for the Windows target expected by Nexa App Builder Pro:
+## Security
+- outbound HTTPS only
+- pairing token stays encrypted through Electron safeStorage
+- Unity Project Paths must also be inside local Allowed Folders
+- Hostinger Read Files permission is required for workspace sync
+- Hostinger Screenshots permission is required to upload visual captures
+- public workspace is a mirror, not unrestricted C:/D:/ access
+- Emergency Stop blocks workspace uploads
 
-- NSIS Installer
-- Portable EXE
-- Windows ZIP
-- ASAR enabled
-- delivery validator
-- project validator
-- baseline tests
-- implementation tests
-- acceptance tests
-- Electron UI smoke test
-
-The included Windows workflow is copied from the current Nexa App Builder Pro Windows workflow template so the project and the control panel use the same delivery contract.
+## Workflow
+1. Connect to Hostinger.
+2. Add Allowed Folders.
+3. Add one or more Unity Project Paths.
+4. Enable Remote Unity Workspace sync.
+5. For visual captures, enable Screenshots on Hostinger and click Install Unity Integration.
+6. Keep Unity open and let the new Editor script compile.
+7. Click Capture Unity Views and then Sync Now, or enable automatic captures/sync.
+8. Generate the secret public workspace link from the Hostinger dashboard and share that exact URL with ChatGPT.

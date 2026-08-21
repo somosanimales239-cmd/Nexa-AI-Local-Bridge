@@ -21,6 +21,9 @@ const els = {
   startWithWindows: $('#startWithWindows'), activity: $('#activity'),
   openLogsBtn: $('#openLogsBtn'), allowedRoots: $('#allowedRoots'), saveLocalBtn: $('#saveLocalBtn'),
   queueBadge: $('#queueBadge'), currentCommand: $('#currentCommand'),
+  unityRoots: $('#unityRoots'), workspaceSyncEnabled: $('#workspaceSyncEnabled'), autoCaptureUnity: $('#autoCaptureUnity'),
+  syncWorkspaceBtn: $('#syncWorkspaceBtn'), installUnityBtn: $('#installUnityBtn'), captureUnityBtn: $('#captureUnityBtn'),
+  workspaceBadge: $('#workspaceBadge'), workspaceMessage: $('#workspaceMessage'), workspaceResults: $('#workspaceResults'),
 };
 
 let latestState = null;
@@ -69,7 +72,7 @@ function statusClass(status) {
 function render(state) {
   if (!state) return;
   latestState = state;
-  els.version.textContent = `v${text(state.version || '1.2.2')}`;
+  els.version.textContent = `v${text(state.version || '1.3.0')}`;
   els.statusText.textContent = text((state.status || 'offline').replaceAll('-', ' ').toUpperCase());
   els.statusPill.className = `status-pill ${statusClass(state.status)}`;
   els.statusMessage.textContent = text(state.statusMessage || '');
@@ -95,10 +98,13 @@ function render(state) {
     els.endpoint.value = state.endpoint || '';
     els.deviceLabel.value = state.deviceLabel || 'Main Windows PC';
     els.allowedRoots.value = Array.isArray(state.allowedRoots) ? state.allowedRoots.join('\n') : '';
+    els.unityRoots.value = Array.isArray(state.unityRoots) ? state.unityRoots.join('\n') : '';
   }
 
   els.autoConnect.checked = state.autoConnect === true;
   els.startWithWindows.checked = state.startWithWindows === true;
+  els.workspaceSyncEnabled.checked = state.workspaceSyncEnabled === true;
+  els.autoCaptureUnity.checked = state.autoCaptureUnity === true;
   els.token.placeholder = state.paired ? 'Stored securely — leave blank to reuse' : 'nexa_...';
   els.tokenHint.textContent = state.paired
     ? 'A token is stored using Electron safeStorage. Leave this field blank to reuse it.'
@@ -115,6 +121,13 @@ function render(state) {
   els.currentCommand.innerHTML = current
     ? `<strong>${text(current.action)}</strong><code>${text(current.uuid)}</code><span>${text(current.status || 'running')}</span>`
     : 'No remote command is running.';
+
+  const wsStatus = state.workspaceStatus || 'idle';
+  els.workspaceBadge.textContent = wsStatus === 'syncing' ? 'Syncing' : wsStatus === 'synced' ? 'Synced' : wsStatus === 'error' ? 'Error' : 'Idle';
+  els.workspaceBadge.className = `chip ${wsStatus === 'synced' ? 'allowed' : wsStatus === 'syncing' ? 'warning' : wsStatus === 'error' ? 'danger' : 'blocked'}`;
+  els.workspaceMessage.textContent = text(state.workspaceMessage || '');
+  const results = Array.isArray(state.workspaceResults) ? state.workspaceResults : [];
+  els.workspaceResults.innerHTML = results.map(r => `<div class="workspace-result"><strong>${text(r.name)}</strong><span>${text(r.fileCount)} files · ${text(r.compileErrors)} compile errors</span><small>${Array.isArray(r.artifacts) && r.artifacts.length ? 'Visuals: '+r.artifacts.map(text).join(', ') : 'No new visuals uploaded'}</small></div>`).join('');
 }
 
 function payload() {
@@ -125,6 +138,9 @@ function payload() {
     autoConnect: els.autoConnect.checked,
     startWithWindows: els.startWithWindows.checked,
     allowedRoots: els.allowedRoots.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
+    unityRoots: els.unityRoots.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
+    workspaceSyncEnabled: els.workspaceSyncEnabled.checked,
+    autoCaptureUnity: els.autoCaptureUnity.checked,
   };
 }
 
@@ -145,6 +161,7 @@ async function withBusy(button, fn) {
 els.endpoint.addEventListener('input', () => { formTouched = true; });
 els.deviceLabel.addEventListener('input', () => { formTouched = true; });
 els.allowedRoots.addEventListener('input', () => { formTouched = true; });
+els.unityRoots.addEventListener('input', () => { formTouched = true; });
 
 els.testBtn.addEventListener('click', () => withBusy(els.testBtn, async () => {
   const result = await window.nexaBridge.testConnection(payload());
@@ -185,16 +202,44 @@ async function savePreferences() {
     autoConnect: els.autoConnect.checked,
     startWithWindows: els.startWithWindows.checked,
     allowedRoots: els.allowedRoots.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
+    unityRoots: els.unityRoots.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
+    workspaceSyncEnabled: els.workspaceSyncEnabled.checked,
+    autoCaptureUnity: els.autoCaptureUnity.checked,
   });
 }
 els.autoConnect.addEventListener('change', savePreferences);
 els.startWithWindows.addEventListener('change', savePreferences);
+els.workspaceSyncEnabled.addEventListener('change', savePreferences);
+els.autoCaptureUnity.addEventListener('change', savePreferences);
 els.saveLocalBtn.addEventListener('click', async () => {
   await savePreferences();
   formTouched = false;
   showTest('Local Allowed Folders and preferences saved.', true);
 });
 els.openLogsBtn.addEventListener('click', () => window.nexaBridge.openLogs());
+
+function firstUnityRoot() {
+  return els.unityRoots.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean)[0] || '';
+}
+els.syncWorkspaceBtn.addEventListener('click', () => withBusy(els.syncWorkspaceBtn, async () => {
+  await savePreferences();
+  const result = await window.nexaBridge.syncWorkspaceNow();
+  showTest(result.ok ? 'Unity workspace synchronized with Hostinger.' : `Workspace sync failed: ${result.error}`, !!result.ok);
+}));
+els.installUnityBtn.addEventListener('click', () => withBusy(els.installUnityBtn, async () => {
+  await savePreferences();
+  const root = firstUnityRoot();
+  if (!root) return showTest('Add a Unity Project Path first.', false);
+  const result = await window.nexaBridge.installUnityIntegration(root);
+  showTest(result.ok ? 'Unity integration installed. Return to Unity and allow scripts to compile.' : `Unity integration failed: ${result.error}`, !!result.ok);
+}));
+els.captureUnityBtn.addEventListener('click', () => withBusy(els.captureUnityBtn, async () => {
+  await savePreferences();
+  const root = firstUnityRoot();
+  if (!root) return showTest('Add a Unity Project Path first.', false);
+  const result = await window.nexaBridge.captureUnityViews(root);
+  showTest(result.ok ? 'Capture request sent. Keep Unity open, then click Sync Now after a few seconds.' : `Capture request failed: ${result.error}`, !!result.ok);
+}));
 
 window.nexaBridge.onState(render);
 window.nexaBridge.getState().then(render);

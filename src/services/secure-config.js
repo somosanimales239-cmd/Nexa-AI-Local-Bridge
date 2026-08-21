@@ -25,6 +25,9 @@ class SecureConfig {
       autoConnect: raw.autoConnect === true,
       startWithWindows: raw.startWithWindows === true,
       allowedRoots: Array.isArray(raw.allowedRoots) ? raw.allowedRoots.filter(v => typeof v === 'string') : [],
+      unityRoots: Array.isArray(raw.unityRoots) ? raw.unityRoots.filter(v => typeof v === 'string') : [],
+      workspaceSyncEnabled: raw.workspaceSyncEnabled === true,
+      autoCaptureUnity: raw.autoCaptureUnity === true,
       paired: typeof raw.tokenEncrypted === 'string' && raw.tokenEncrypted.length > 0,
     };
   }
@@ -43,7 +46,7 @@ class SecureConfig {
     }
   }
 
-  savePairing({ endpoint, deviceLabel, token, autoConnect, startWithWindows, allowedRoots }) {
+  savePairing({ endpoint, deviceLabel, token, autoConnect, startWithWindows, allowedRoots, unityRoots, workspaceSyncEnabled, autoCaptureUnity }) {
     if (!this.safeStorage.isEncryptionAvailable()) {
       throw new Error('Secure token storage is unavailable. The pairing token was not saved.');
     }
@@ -55,6 +58,9 @@ class SecureConfig {
       autoConnect: autoConnect === true,
       startWithWindows: startWithWindows === true,
       allowedRoots: Array.isArray(allowedRoots) ? allowedRoots : [],
+      unityRoots: Array.isArray(unityRoots) ? unityRoots : [],
+      workspaceSyncEnabled: workspaceSyncEnabled === true,
+      autoCaptureUnity: autoCaptureUnity === true,
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -69,6 +75,11 @@ class SecureConfig {
       allowedRoots: patch.allowedRoots === undefined
         ? (Array.isArray(raw.allowedRoots) ? raw.allowedRoots : [])
         : (Array.isArray(patch.allowedRoots) ? patch.allowedRoots : []),
+      unityRoots: patch.unityRoots === undefined
+        ? (Array.isArray(raw.unityRoots) ? raw.unityRoots : [])
+        : (Array.isArray(patch.unityRoots) ? patch.unityRoots : []),
+      workspaceSyncEnabled: patch.workspaceSyncEnabled === undefined ? raw.workspaceSyncEnabled === true : patch.workspaceSyncEnabled === true,
+      autoCaptureUnity: patch.autoCaptureUnity === undefined ? raw.autoCaptureUnity === true : patch.autoCaptureUnity === true,
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });

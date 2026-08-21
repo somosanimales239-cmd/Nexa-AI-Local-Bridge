@@ -15,9 +15,12 @@ const {
   sendHeartbeat, sendServerLog
 } = require('./src/services/bridge-client');
 const { executeReadOnlyCommand } = require('./src/services/read-only-executor');
+const { deriveWorkspaceEndpoint } = require('./src/services/workspace-client');
+const { syncUnityProject, installUnityIntegration, requestUnityCapture } = require('./src/services/unity-workspace');
 
 const HEARTBEAT_MS = 20_000;
 const COMMAND_POLL_MS = 5_000;
+const WORKSPACE_SYNC_MS = 90_000;
 const RETRY_DELAYS = [2_000, 5_000, 10_000, 20_000, 30_000];
 
 let mainWindow = null;
@@ -26,6 +29,8 @@ let configStore = null;
 let logger = null;
 let heartbeatTimer = null;
 let commandTimer = null;
+let workspaceTimer = null;
+let workspaceBusy = false;
 let commandBusy = false;
 let retryIndex = 0;
 let systemInfo = null;
@@ -51,6 +56,13 @@ const state = {
   startWithWindows: false,
   paired: false,
   allowedRoots: [],
+  unityRoots: [],
+  workspaceSyncEnabled: false,
+  autoCaptureUnity: false,
+  workspaceStatus: 'idle',
+  workspaceMessage: 'Unity workspace sync is not configured.',
+  lastWorkspaceSync: '',
+  workspaceResults: [],
   commandEndpoint: '',
   currentCommand: null,
   policy: policy.snapshot(),
@@ -85,6 +97,9 @@ function updateConfigState() {
   state.startWithWindows = cfg.startWithWindows;
   state.paired = cfg.paired;
   state.allowedRoots = Array.isArray(cfg.allowedRoots) ? cfg.allowedRoots : [];
+  state.unityRoots = Array.isArray(cfg.unityRoots) ? cfg.unityRoots : [];
+  state.workspaceSyncEnabled = cfg.workspaceSyncEnabled === true;
+  state.autoCaptureUnity = cfg.autoCaptureUnity === true;
   if (!cfg.paired && !state.connected) state.status = 'unpaired';
 }
 
@@ -118,6 +133,67 @@ function stopTimer() {
 function stopCommandTimer() {
   if (commandTimer) clearTimeout(commandTimer);
   commandTimer = null;
+}
+
+function stopWorkspaceTimer() {
+  if (workspaceTimer) clearTimeout(workspaceTimer);
+  workspaceTimer = null;
+}
+
+function scheduleWorkspaceSync(delayMs = WORKSPACE_SYNC_MS) {
+  stopWorkspaceTimer();
+  if (!state.paired || !state.connected || !state.workspaceSyncEnabled) return;
+  workspaceTimer = setTimeout(() => {
+    workspaceSyncCycle(false).catch(error => {
+      state.workspaceStatus = 'error';
+      state.workspaceMessage = error.message;
+      safeActivity('warning', 'unity-workspace', `Workspace sync failed: ${error.message}`);
+      scheduleWorkspaceSync(WORKSPACE_SYNC_MS);
+    });
+  }, delayMs);
+}
+
+async function workspaceSyncCycle(manual = false) {
+  stopWorkspaceTimer();
+  if (workspaceBusy) return { ok: false, error: 'Workspace sync is already running.' };
+  if (!state.paired || !state.connected) throw new Error('Connect the Bridge before syncing Unity workspaces.');
+  if (!policy.canExecute('read_files')) throw new Error('Enable Read Files in the Hostinger dashboard before workspace sync.');
+  const cfg = configStore.publicConfig();
+  const roots = Array.isArray(cfg.unityRoots) ? cfg.unityRoots.filter(Boolean) : [];
+  if (!roots.length) throw new Error('Add at least one Unity Project Path in the Windows app.');
+  const token = configStore.getToken();
+  const endpoint = deriveWorkspaceEndpoint(cfg.endpoint);
+  workspaceBusy = true;
+  state.workspaceStatus = 'syncing';
+  state.workspaceMessage = `Syncing ${roots.length} Unity project${roots.length === 1 ? '' : 's'}…`;
+  state.workspaceResults = [];
+  broadcastState();
+  const results = [];
+  try {
+    for (const root of roots) {
+      if (cfg.autoCaptureUnity === true && policy.canExecute('screenshots')) {
+        try { await requestUnityCapture(root, cfg.allowedRoots); await new Promise(r => setTimeout(r, 1800)); } catch {}
+      }
+      const result = await syncUnityProject({
+        root,
+        allowedRoots: cfg.allowedRoots,
+        endpoint,
+        token,
+        screenshotPermission: policy.canExecute('screenshots'),
+      });
+      results.push(result);
+      safeActivity('info', 'unity-workspace', `Synced ${result.name}: ${result.file_count} mirrored files.`);
+    }
+    state.workspaceStatus = 'synced';
+    state.workspaceMessage = `Unity workspace synced: ${results.map(r => r.name).join(', ')}.`;
+    state.lastWorkspaceSync = new Date().toISOString();
+    state.workspaceResults = results.map(r => ({ name:r.name, fileCount:r.file_count, compileErrors:r.stats?.compile_error_count || 0, artifacts:r.artifacts || [] }));
+    broadcastState();
+    return { ok: true, results, state: publicState() };
+  } finally {
+    workspaceBusy = false;
+    if (state.workspaceSyncEnabled) scheduleWorkspaceSync(WORKSPACE_SYNC_MS);
+  }
 }
 
 function scheduleCommandPoll(delayMs = COMMAND_POLL_MS) {
@@ -161,6 +237,7 @@ async function heartbeatOnce({ endpoint, token }) {
   retryIndex = 0;
   broadcastState();
   if (!commandTimer && !commandBusy) scheduleCommandPoll(1000);
+  if (state.workspaceSyncEnabled && !workspaceTimer && !workspaceBusy) scheduleWorkspaceSync(2500);
   return response;
 }
 
@@ -221,6 +298,9 @@ async function connectInternal(payload, savePairing) {
       autoConnect: payload?.autoConnect === undefined ? current.autoConnect : payload.autoConnect === true,
       startWithWindows: payload?.startWithWindows === undefined ? current.startWithWindows : payload.startWithWindows === true,
       allowedRoots: Array.isArray(payload?.allowedRoots) ? payload.allowedRoots : current.allowedRoots,
+      unityRoots: Array.isArray(payload?.unityRoots) ? payload.unityRoots : current.unityRoots,
+      workspaceSyncEnabled: payload?.workspaceSyncEnabled === undefined ? current.workspaceSyncEnabled : payload.workspaceSyncEnabled === true,
+      autoCaptureUnity: payload?.autoCaptureUnity === undefined ? current.autoCaptureUnity : payload.autoCaptureUnity === true,
     });
     updateConfigState();
     applyLoginPreference(state.startWithWindows);
@@ -290,6 +370,7 @@ async function commandCycle() {
 function disconnectInternal() {
   stopTimer();
   stopCommandTimer();
+  stopWorkspaceTimer();
   policy.markDisconnected();
   state.policy = policy.snapshot();
   state.connected = false;
@@ -376,7 +457,7 @@ function refreshTray() {
     }},
     { label: 'Disconnect', enabled: state.connected, click: () => disconnectInternal() },
     { type: 'separator' },
-    { label: 'Quit', click: () => { quitting = true; stopTimer(); stopCommandTimer(); app.quit(); } },
+    { label: 'Quit', click: () => { quitting = true; stopTimer(); stopCommandTimer(); stopWorkspaceTimer(); app.quit(); } },
   ]));
 }
 
@@ -435,11 +516,39 @@ ipcMain.handle('bridge:update-preferences', (_event, payload) => {
     autoConnect: payload?.autoConnect,
     startWithWindows: payload?.startWithWindows,
     allowedRoots: Array.isArray(payload?.allowedRoots) ? payload.allowedRoots : undefined,
+    unityRoots: Array.isArray(payload?.unityRoots) ? payload.unityRoots : undefined,
+    workspaceSyncEnabled: payload?.workspaceSyncEnabled,
+    autoCaptureUnity: payload?.autoCaptureUnity,
   });
   updateConfigState();
   applyLoginPreference(next.startWithWindows);
   safeActivity('info', 'preferences', 'Local preferences updated.');
   return { ok: true, state: publicState() };
+});
+
+ipcMain.handle('bridge:workspace-sync-now', async () => {
+  try { return await workspaceSyncCycle(true); }
+  catch (error) {
+    state.workspaceStatus = 'error'; state.workspaceMessage = error.message; broadcastState();
+    safeActivity('warning', 'unity-workspace', error.message);
+    return { ok:false, error:error.message };
+  }
+});
+
+ipcMain.handle('bridge:unity-install', async (_event, root) => {
+  try {
+    const result = await installUnityIntegration(root, configStore.publicConfig().allowedRoots);
+    safeActivity('info', 'unity', `Unity integration installed: ${result.file}`);
+    return { ok:true, ...result };
+  } catch (error) { return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('bridge:unity-capture', async (_event, root) => {
+  try {
+    await requestUnityCapture(root, configStore.publicConfig().allowedRoots);
+    safeActivity('info', 'unity', 'Requested Scene View and Game View capture from Unity Editor.');
+    return { ok:true };
+  } catch (error) { return { ok:false, error:error.message }; }
 });
 
 ipcMain.handle('bridge:unpair', () => {
@@ -451,6 +560,10 @@ ipcMain.handle('bridge:unpair', () => {
   state.endpoint = '';
   state.deviceLabel = '';
   state.allowedRoots = [];
+  state.unityRoots = [];
+  state.workspaceSyncEnabled = false;
+  state.workspaceStatus = 'idle';
+  state.workspaceMessage = 'Unity workspace sync is not configured.';
   state.commandEndpoint = '';
   state.currentCommand = null;
   state.status = 'unpaired';
@@ -496,6 +609,7 @@ app.on('before-quit', () => {
   quitting = true;
   stopTimer();
   stopCommandTimer();
+  stopWorkspaceTimer();
 });
 
 app.on('window-all-closed', () => {
