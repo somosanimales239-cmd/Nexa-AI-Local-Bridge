@@ -1,7 +1,7 @@
 {
   "name": "nexa-ai-local-bridge",
-  "version": "1.2.0",
-  "description": "Secure Windows companion for Nexa AI Computer Bridge with Hostinger heartbeat, policy synchronization, and read-only remote command execution.",
+  "version": "1.2.1",
+  "description": "Secure Windows companion for Nexa AI Computer Bridge with Hostinger-safe HTTP/1.1 transport, heartbeat, policy synchronization, and read-only remote command execution.",
   "main": "main.js",
   "author": "Nexa",
   "license": "UNLICENSED",
@@ -17,7 +17,7 @@
     "test": "npm run test:baseline && npm run test:implementation && npm run test:acceptance",
     "ui:smoke": "electron scripts/ui-smoke.js",
     "test:baseline": "node --test scripts/nexa-baseline.test.js",
-    "test:implementation": "node --test scripts/implementation.test.js",
+    "test:implementation": "node --test scripts/implementation.test.js scripts/network-transport.test.js",
     "test:acceptance": "node --test scripts/acceptance.test.js"
   },
   "devDependencies": {

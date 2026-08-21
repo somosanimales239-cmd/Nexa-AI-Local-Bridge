@@ -69,7 +69,7 @@ function statusClass(status) {
 function render(state) {
   if (!state) return;
   latestState = state;
-  els.version.textContent = `v${text(state.version || '1.2.0')}`;
+  els.version.textContent = `v${text(state.version || '1.2.1')}`;
   els.statusText.textContent = text((state.status || 'offline').replaceAll('-', ' ').toUpperCase());
   els.statusPill.className = `status-pill ${statusClass(state.status)}`;
   els.statusMessage.textContent = text(state.statusMessage || '');

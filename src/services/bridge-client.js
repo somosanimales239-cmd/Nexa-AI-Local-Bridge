@@ -1,11 +1,16 @@
 'use strict';
 
+const http = require('http');
+const https = require('https');
 const { URL } = require('url');
 
 const PERMISSION_KEYS = [
   'read_files','write_files','cmd','powershell','python',
   'git','browser','screenshots','blender','local_servers'
 ];
+
+const DEFAULT_TIMEOUT_MS = 20_000;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
 
 function validateEndpoint(value) {
   let url;
@@ -48,57 +53,146 @@ function validateHeartbeatResponse(data) {
   };
 }
 
-async function postJson(endpoint, token, payload, timeoutMs = 9000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(endpoint, {
+function friendlyNetworkError(error, endpoint) {
+  const code = String(error?.code || '').toUpperCase();
+  const host = (() => { try { return new URL(endpoint).hostname; } catch { return 'Hostinger'; } })();
+  let message;
+
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    message = `DNS could not resolve ${host}.`;
+  } else if (code === 'ECONNRESET') {
+    message = `Hostinger reset the HTTPS connection to ${host}.`;
+  } else if (code === 'ECONNREFUSED') {
+    message = `The HTTPS connection to ${host} was refused.`;
+  } else if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || code === 'NEXA_TIMEOUT') {
+    message = `Connection timed out while contacting ${host}.`;
+  } else if (code.startsWith('CERT_') || code.includes('TLS') || code.includes('SSL')) {
+    message = `TLS certificate validation failed while contacting ${host}.`;
+  } else {
+    message = error?.message ? `Network error while contacting ${host}: ${error.message}` : `Network error while contacting ${host}.`;
+  }
+
+  const wrapped = new Error(message);
+  wrapped.code = code || 'NETWORK_ERROR';
+  wrapped.cause = error;
+  return wrapped;
+}
+
+/**
+ * Windows/Hostinger-safe JSON transport.
+ *
+ * Electron/Node fetch can choose a network path that behaves differently from
+ * Windows curl on some CDN/DNS combinations. The bridge therefore uses a
+ * deterministic HTTP/1.1 request, forces IPv4 for production HTTPS, disables
+ * connection reuse, and applies an explicit timeout.
+ */
+function requestJsonHttp11(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(validateEndpoint(endpoint));
+    const body = JSON.stringify(payload);
+    const isHttps = url.protocol === 'https:';
+    const transport = isHttps ? https : http;
+    let settled = false;
+
+    const options = {
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port || (isHttps ? 443 : 80),
+      path: `${url.pathname}${url.search}`,
       method: 'POST',
+      family: isHttps ? 4 : undefined,
+      agent: false,
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        'User-Agent': 'Nexa-AI-Local-Bridge/1.2.1',
+        'Content-Length': Buffer.byteLength(body),
+        'Connection': 'close',
+        'Cache-Control': 'no-cache',
       },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-      cache: 'no-store',
-      redirect: 'error',
+      ...(isHttps ? {
+        servername: url.hostname,
+        ALPNProtocols: ['http/1.1'],
+        minVersion: 'TLSv1.2',
+      } : {}),
+    };
+
+    const finishReject = error => {
+      if (settled) return;
+      settled = true;
+      reject(friendlyNetworkError(error, endpoint));
+    };
+
+    const request = transport.request(options, response => {
+      const chunks = [];
+      let bytes = 0;
+
+      response.on('data', chunk => {
+        bytes += chunk.length;
+        if (bytes > MAX_RESPONSE_BYTES) {
+          const error = new Error('Hostinger response exceeded the safe JSON response limit.');
+          error.code = 'RESPONSE_TOO_LARGE';
+          request.destroy(error);
+          return;
+        }
+        chunks.push(chunk);
+      });
+
+      response.on('end', () => {
+        if (settled) return;
+        settled = true;
+        resolve({
+          status: Number(response.statusCode || 0),
+          headers: response.headers || {},
+          text: Buffer.concat(chunks).toString('utf8'),
+        });
+      });
+
+      response.on('error', finishReject);
     });
 
-    let data = null;
-    const text = await response.text();
-    if (text) {
-      try { data = JSON.parse(text); } catch {}
-    }
+    request.setTimeout(timeoutMs, () => {
+      const error = new Error(`Timed out after ${timeoutMs} ms`);
+      error.code = 'NEXA_TIMEOUT';
+      request.destroy(error);
+    });
 
-    if (response.status === 401) {
-      const error = new Error('Pairing token was rejected. Generate a new token in the Nexa AI Computer Bridge dashboard.');
-      error.code = 'AUTH_REJECTED';
-      throw error;
-    }
-    if (response.status === 503) {
-      const error = new Error('The cloud bridge is currently disabled in the Hostinger dashboard.');
-      error.code = 'BRIDGE_DISABLED';
-      throw error;
-    }
-    if (!response.ok) {
-      const detail = data && typeof data.error === 'string' ? ` ${data.error}` : '';
-      const error = new Error(`Hostinger returned HTTP ${response.status}.${detail}`.trim());
-      error.code = response.status >= 500 ? 'SERVER_ERROR' : 'HTTP_ERROR';
-      throw error;
-    }
-    if (!data) throw new Error('Hostinger returned malformed JSON.');
-    return data;
-  } catch (error) {
-    if (error && error.name === 'AbortError') {
-      const timeoutError = new Error('Connection timed out while contacting Hostinger.');
-      timeoutError.code = 'TIMEOUT';
-      throw timeoutError;
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
+    request.on('socket', socket => {
+      socket.setKeepAlive(false);
+      socket.setNoDelay(true);
+    });
+    request.on('error', finishReject);
+    request.end(body);
+  });
+}
+
+async function postJson(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const response = await requestJsonHttp11(endpoint, token, payload, timeoutMs);
+
+  let data = null;
+  if (response.text) {
+    try { data = JSON.parse(response.text); } catch {}
   }
+
+  if (response.status === 401) {
+    const error = new Error('Pairing token was rejected. Generate a new token in the Nexa AI Computer Bridge dashboard.');
+    error.code = 'AUTH_REJECTED';
+    throw error;
+  }
+  if (response.status === 503) {
+    const error = new Error('The cloud bridge is currently disabled in the Hostinger dashboard.');
+    error.code = 'BRIDGE_DISABLED';
+    throw error;
+  }
+  if (response.status < 200 || response.status >= 300) {
+    const detail = data && typeof data.error === 'string' ? ` ${data.error}` : '';
+    const error = new Error(`Hostinger returned HTTP ${response.status}.${detail}`.trim());
+    error.code = response.status >= 500 ? 'SERVER_ERROR' : 'HTTP_ERROR';
+    throw error;
+  }
+  if (!data) throw new Error('Hostinger returned malformed JSON.');
+  return data;
 }
 
 async function sendHeartbeat(endpoint, token, systemInfo) {
@@ -118,7 +212,6 @@ async function sendServerLog(endpoint, token, level, message) {
   return true;
 }
 
-
 function deriveCommandEndpoint(agentEndpoint) {
   const url = new URL(validateEndpoint(agentEndpoint));
   if (/\/agent\.php$/i.test(url.pathname)) {
@@ -131,7 +224,7 @@ function deriveCommandEndpoint(agentEndpoint) {
 
 async function pollCommand(commandEndpoint, token) {
   const endpoint = validateEndpoint(commandEndpoint);
-  const data = await postJson(endpoint, token, { action: 'poll' }, 9000);
+  const data = await postJson(endpoint, token, { action: 'poll' }, 20_000);
   if (!data || data.ok !== true) throw new Error('Hostinger command queue returned an invalid response.');
   if (data.command !== null && data.command !== undefined) {
     const command = data.command;
@@ -148,23 +241,25 @@ async function pollCommand(commandEndpoint, token) {
 
 async function submitCommandResult(commandEndpoint, token, uuid, result) {
   const endpoint = validateEndpoint(commandEndpoint);
-  return postJson(endpoint, token, { action: 'result', uuid, result }, 12000);
+  return postJson(endpoint, token, { action: 'result', uuid, result }, 25_000);
 }
 
 async function submitCommandError(commandEndpoint, token, uuid, error) {
   const endpoint = validateEndpoint(commandEndpoint);
-  return postJson(endpoint, token, { action: 'error', uuid, error: String(error || 'Command failed').slice(0, 4000) }, 12000);
+  return postJson(endpoint, token, { action: 'error', uuid, error: String(error || 'Command failed').slice(0, 4000) }, 25_000);
 }
 
 async function submitCommandCancelled(commandEndpoint, token, uuid) {
   const endpoint = validateEndpoint(commandEndpoint);
-  return postJson(endpoint, token, { action: 'cancelled', uuid }, 12000);
+  return postJson(endpoint, token, { action: 'cancelled', uuid }, 25_000);
 }
 
 module.exports = {
   PERMISSION_KEYS,
   validateEndpoint,
   validateHeartbeatResponse,
+  requestJsonHttp11,
+  postJson,
   deriveCommandEndpoint,
   pollCommand,
   submitCommandResult,

@@ -1,4 +1,14 @@
-# Nexa AI Local Bridge 1.2.0
+# Nexa AI Local Bridge 1.2.1
+
+
+## 1.2.1 Windows / Hostinger connectivity fix
+
+- Replaces the Electron/Node `fetch()` bridge transport with deterministic native HTTP/1.1 requests.
+- Forces IPv4 for production HTTPS endpoints to match the Windows connectivity path validated with `curl.exe --http1.1`.
+- Uses `Connection: close` and disables connection reuse for Hostinger CDN compatibility.
+- Raises heartbeat/queue timeouts from 9 seconds to 20 seconds (25 seconds for command result submission).
+- Reports DNS, reset, refused, timeout, and TLS failures separately instead of a generic timeout.
+
 
 Windows companion for Nexa AI Computer Bridge on Hostinger.
 
@@ -14,7 +24,7 @@ Windows companion for Nexa AI Computer Bridge on Hostinger.
 
 ## Nexa App Builder Pro delivery contract
 
-Version 1.2.0 is packaged for the Windows target expected by Nexa App Builder Pro:
+Version 1.2.1 is packaged for the Windows target expected by Nexa App Builder Pro:
 
 - NSIS Installer
 - Portable EXE

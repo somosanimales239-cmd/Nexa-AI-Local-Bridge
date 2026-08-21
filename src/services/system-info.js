@@ -37,7 +37,7 @@ async function collectSystemInfo(appVersion) {
       : `${os.type()} ${os.release()}`,
     local_ip: firstLocalIPv4(),
     gpu: await gpuName(),
-    agent_version: String(appVersion || '1.2.0'),
+    agent_version: String(appVersion || '1.2.1'),
   };
 }
 
