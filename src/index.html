@@ -16,7 +16,7 @@
         <div><strong>Nexa AI Local Bridge</strong><small>Secure Windows Companion</small></div>
       </div>
       <div class="header-right">
-        <span id="version" class="version">v1.3.0</span>
+        <span id="version" class="version">v1.4.0</span>
         <span id="statusPill" class="status-pill offline"><i></i><b id="statusText">UNPAIRED</b></span>
       </div>
     </header>
@@ -107,6 +107,39 @@
           <div id="workspaceResults" class="workspace-results"></div>
         </article>
 
+        <article class="card github-workspace-card">
+          <div class="section-heading compact">
+            <div><span class="eyebrow">GITHUB REMOTE WORKSPACE</span><h2>ChatGPT Plus read + write bridge</h2><p>Publishes the authorized Unity mirror to a dedicated GitHub branch that this ChatGPT can inspect. Optional write-back safely applies remote text edits to Unity only when Hostinger Write Files is ON.</p></div>
+            <span id="githubBadge" class="chip blocked">Idle</span>
+          </div>
+          <div class="form-grid github-grid">
+            <label class="field">
+              <span>GitHub Repository</span>
+              <input id="githubRepo" type="text" spellcheck="false" value="somosanimales239-cmd/Nexa-AI-Local-Bridge" placeholder="owner/repository">
+            </label>
+            <label class="field">
+              <span>Workspace Branch</span>
+              <input id="githubBranch" type="text" spellcheck="false" value="nexa-unity-workspace" placeholder="nexa-unity-workspace">
+            </label>
+            <label class="field full">
+              <span>GitHub Fine-grained Token</span>
+              <input id="githubToken" type="password" autocomplete="off" placeholder="github_pat_...">
+              <small id="githubTokenHint">Stored only on this PC with Electron safeStorage. Required permission: Contents · Read and write for the selected repository. It is never sent to Hostinger or written to logs.</small>
+            </label>
+          </div>
+          <div class="toggle-list workspace-toggles">
+            <label class="toggle-row"><span><strong>Publish Unity workspace to GitHub</strong><small>After Hostinger sync, publish scripts, scenes, prefabs, shaders, materials, configs, logs, status, binary index and Unity captures to the workspace branch.</small></span><input id="githubSyncEnabled" type="checkbox"><i></i></label>
+            <label class="toggle-row"><span><strong>Apply ChatGPT edits back to Unity</strong><small>Requires Hostinger Write Files = ON. Only approved Unity text formats are written; local conflicts are protected and remote deletes are ignored.</small></span><input id="githubApplyEnabled" type="checkbox"><i></i></label>
+          </div>
+          <div class="button-row workspace-actions">
+            <button id="githubSaveBtn" class="btn primary" type="button">Save & Verify GitHub</button>
+            <button id="githubTestBtn" class="btn secondary" type="button">Test GitHub</button>
+            <button id="githubSyncBtn" class="btn secondary" type="button">Publish Now</button>
+          </div>
+          <div id="githubMessage" class="current-command empty">GitHub Remote Workspace is not configured.</div>
+          <div id="githubResults" class="workspace-results"></div>
+        </article>
+
         <article class="card queue-card">
           <div class="section-heading compact">
             <div><span class="eyebrow">REMOTE QUEUE · READ ONLY</span><h2>Current Hostinger command</h2><p>Status, drives, directories, text files, processes, GPU and CUDA diagnostics remain available alongside Unity workspace sync.</p></div>
@@ -159,8 +192,8 @@
 
         <article class="card future-card">
           <span class="eyebrow">AI ACCESS</span>
-          <h2>Public Unity Workspace</h2>
-          <p>v1.3.0 publishes a secret-link, read-only Unity mirror on Hostinger so a ChatGPT Plus conversation can inspect the authorized project without MCP.</p>
+          <h2>Hostinger + GitHub Workspace</h2>
+          <p>v1.4.0 keeps the Hostinger mirror and adds a dedicated GitHub snapshot branch. This ChatGPT Plus can inspect the branch, and optional safe write-back can apply approved text edits to Unity.</p>
         </article>
       </aside>
     </section>

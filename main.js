@@ -17,6 +17,7 @@ const {
 const { executeReadOnlyCommand } = require('./src/services/read-only-executor');
 const { deriveWorkspaceEndpoint } = require('./src/services/workspace-client');
 const { syncUnityProject, installUnityIntegration, requestUnityCapture } = require('./src/services/unity-workspace');
+const { validateRepo, validateBranch, testGithubConnection, publishGithubWorkspaces } = require('./src/services/github-workspace');
 
 const HEARTBEAT_MS = 20_000;
 const COMMAND_POLL_MS = 5_000;
@@ -63,6 +64,16 @@ const state = {
   workspaceMessage: 'Unity workspace sync is not configured.',
   lastWorkspaceSync: '',
   workspaceResults: [],
+  githubConfigured: false,
+  githubRepo: 'somosanimales239-cmd/Nexa-AI-Local-Bridge',
+  githubBranch: 'nexa-unity-workspace',
+  githubSyncEnabled: false,
+  githubApplyEnabled: false,
+  githubStatus: 'idle',
+  githubMessage: 'GitHub Remote Workspace is not configured.',
+  githubLastSync: '',
+  githubLastCommit: '',
+  githubPullResults: [],
   commandEndpoint: '',
   currentCommand: null,
   policy: policy.snapshot(),
@@ -100,6 +111,11 @@ function updateConfigState() {
   state.unityRoots = Array.isArray(cfg.unityRoots) ? cfg.unityRoots : [];
   state.workspaceSyncEnabled = cfg.workspaceSyncEnabled === true;
   state.autoCaptureUnity = cfg.autoCaptureUnity === true;
+  state.githubConfigured = cfg.githubConfigured === true;
+  state.githubRepo = cfg.githubRepo || 'somosanimales239-cmd/Nexa-AI-Local-Bridge';
+  state.githubBranch = cfg.githubBranch || 'nexa-unity-workspace';
+  state.githubSyncEnabled = cfg.githubSyncEnabled === true;
+  state.githubApplyEnabled = cfg.githubApplyEnabled === true;
   if (!cfg.paired && !state.connected) state.status = 'unpaired';
 }
 
@@ -167,8 +183,14 @@ async function workspaceSyncCycle(manual = false) {
   state.workspaceStatus = 'syncing';
   state.workspaceMessage = `Syncing ${roots.length} Unity project${roots.length === 1 ? '' : 's'}…`;
   state.workspaceResults = [];
+  if (cfg.githubSyncEnabled) {
+    state.githubStatus = 'syncing';
+    state.githubMessage = 'Publishing GitHub Remote Workspace…';
+  }
   broadcastState();
   const results = [];
+  let githubResult = null;
+  let githubError = null;
   try {
     for (const root of roots) {
       if (cfg.autoCaptureUnity === true && policy.canExecute('screenshots')) {
@@ -188,8 +210,41 @@ async function workspaceSyncCycle(manual = false) {
     state.workspaceMessage = `Unity workspace synced: ${results.map(r => r.name).join(', ')}.`;
     state.lastWorkspaceSync = new Date().toISOString();
     state.workspaceResults = results.map(r => ({ name:r.name, fileCount:r.file_count, compileErrors:r.stats?.compile_error_count || 0, artifacts:r.artifacts || [] }));
+
+    if (cfg.githubSyncEnabled) {
+      try {
+        if (!cfg.githubConfigured) throw new Error('Save a GitHub token before enabling GitHub Remote Workspace.');
+        githubResult = await publishGithubWorkspaces({
+          roots,
+          allowedRoots: cfg.allowedRoots,
+          repo: cfg.githubRepo,
+          branch: cfg.githubBranch,
+          token: configStore.getGithubToken(),
+          stateFile: path.join(app.getPath('userData'), 'github-workspace-state.json'),
+          applyRemote: cfg.githubApplyEnabled === true,
+          writePermission: policy.canExecute('write_files'),
+          screenshotPermission: policy.canExecute('screenshots'),
+        });
+        state.githubStatus = 'synced';
+        state.githubMessage = `GitHub workspace published to ${githubResult.repo} · ${githubResult.branch}.`;
+        state.githubLastSync = new Date().toISOString();
+        state.githubLastCommit = githubResult.commitSha || '';
+        state.githubPullResults = githubResult.pullResults || [];
+        const applied = state.githubPullResults.reduce((n,r)=>n+(r.applied||0),0);
+        const conflicts = state.githubPullResults.reduce((n,r)=>n+(r.conflicts||0),0);
+        safeActivity('info', 'github-workspace', `Published GitHub workspace${applied ? ` and applied ${applied} remote edit${applied===1?'':'s'}` : ''}${conflicts ? `; ${conflicts} conflict${conflicts===1?'':'s'} protected` : ''}.`);
+      } catch (error) {
+        githubError = error;
+        state.githubStatus = 'error';
+        state.githubMessage = error.message;
+        safeActivity('warning', 'github-workspace', `GitHub workspace sync failed: ${error.message}`);
+      }
+    } else {
+      state.githubStatus = cfg.githubConfigured ? 'idle' : 'idle';
+      state.githubMessage = cfg.githubConfigured ? 'GitHub Remote Workspace is configured but automatic publishing is OFF.' : 'GitHub Remote Workspace is not configured.';
+    }
     broadcastState();
-    return { ok: true, results, state: publicState() };
+    return { ok: true, results, github: githubResult, githubError: githubError?.message || '', state: publicState() };
   } finally {
     workspaceBusy = false;
     if (state.workspaceSyncEnabled) scheduleWorkspaceSync(WORKSPACE_SYNC_MS);
@@ -519,11 +574,80 @@ ipcMain.handle('bridge:update-preferences', (_event, payload) => {
     unityRoots: Array.isArray(payload?.unityRoots) ? payload.unityRoots : undefined,
     workspaceSyncEnabled: payload?.workspaceSyncEnabled,
     autoCaptureUnity: payload?.autoCaptureUnity,
+    githubSyncEnabled: payload?.githubSyncEnabled,
+    githubApplyEnabled: payload?.githubApplyEnabled,
   });
   updateConfigState();
   applyLoginPreference(next.startWithWindows);
   safeActivity('info', 'preferences', 'Local preferences updated.');
   return { ok: true, state: publicState() };
+});
+
+ipcMain.handle('bridge:github-save', async (_event, payload) => {
+  try {
+    const repo = validateRepo(payload?.repo);
+    const branch = validateBranch(payload?.branch || 'nexa-unity-workspace');
+    const token = typeof payload?.token === 'string' && payload.token.trim() ? payload.token.trim() : configStore.getGithubToken();
+    if (!token) throw new Error('Enter a GitHub fine-grained token.');
+    await testGithubConnection({ repo, token });
+    configStore.saveGithub({
+      repo,
+      branch,
+      token: typeof payload?.token === 'string' ? payload.token : '',
+      syncEnabled: payload?.syncEnabled === true,
+      applyEnabled: payload?.applyEnabled === true,
+    });
+    updateConfigState();
+    state.githubStatus = 'ready';
+    state.githubMessage = `GitHub access verified for ${repo}.`;
+    safeActivity('info', 'github-workspace', `GitHub Remote Workspace configured for ${repo} on branch ${branch}.`);
+    broadcastState();
+    return { ok:true, state:publicState() };
+  } catch (error) {
+    state.githubStatus = 'error'; state.githubMessage = error.message; broadcastState();
+    safeActivity('warning', 'github-workspace', `GitHub setup failed: ${error.message}`);
+    return { ok:false, error:error.message, code:error.code||'ERROR' };
+  }
+});
+
+ipcMain.handle('bridge:github-test', async (_event, payload) => {
+  try {
+    const cfg = configStore.publicConfig();
+    const repo = validateRepo(payload?.repo || cfg.githubRepo);
+    const token = typeof payload?.token === 'string' && payload.token.trim() ? payload.token.trim() : configStore.getGithubToken();
+    if (!token) throw new Error('Enter a GitHub fine-grained token.');
+    const result = await testGithubConnection({ repo, token });
+    safeActivity('info', 'github-workspace', `GitHub connection test passed for ${repo}.`);
+    return { ok:true, ...result };
+  } catch (error) {
+    safeActivity('warning', 'github-workspace', `GitHub connection test failed: ${error.message}`);
+    return { ok:false, error:error.message, code:error.code||'ERROR' };
+  }
+});
+
+ipcMain.handle('bridge:github-sync-now', async () => {
+  try {
+    const cfg = configStore.publicConfig();
+    if (!cfg.githubConfigured) throw new Error('Configure GitHub Remote Workspace first.');
+    if (!policy.canExecute('read_files')) throw new Error('Enable Read Files in Hostinger before GitHub publishing.');
+    const roots = Array.isArray(cfg.unityRoots) ? cfg.unityRoots.filter(Boolean) : [];
+    if (!roots.length) throw new Error('Add at least one Unity Project Path.');
+    state.githubStatus='syncing'; state.githubMessage='Publishing GitHub Remote Workspace…'; broadcastState();
+    const result = await publishGithubWorkspaces({
+      roots,
+      allowedRoots: cfg.allowedRoots,
+      repo: cfg.githubRepo,
+      branch: cfg.githubBranch,
+      token: configStore.getGithubToken(),
+      stateFile: path.join(app.getPath('userData'), 'github-workspace-state.json'),
+      applyRemote: cfg.githubApplyEnabled === true,
+      writePermission: policy.canExecute('write_files'),
+      screenshotPermission: policy.canExecute('screenshots'),
+    });
+    state.githubStatus='synced'; state.githubMessage=`GitHub workspace published to ${result.repo} · ${result.branch}.`; state.githubLastSync=new Date().toISOString(); state.githubLastCommit=result.commitSha||''; state.githubPullResults=result.pullResults||[];
+    safeActivity('info','github-workspace',`GitHub workspace published: ${result.commitSha||'commit created'}.`); broadcastState();
+    return {ok:true,result,state:publicState()};
+  } catch(error){ state.githubStatus='error';state.githubMessage=error.message;broadcastState();safeActivity('warning','github-workspace',error.message);return{ok:false,error:error.message,code:error.code||'ERROR'}; }
 });
 
 ipcMain.handle('bridge:workspace-sync-now', async () => {
@@ -564,6 +688,14 @@ ipcMain.handle('bridge:unpair', () => {
   state.workspaceSyncEnabled = false;
   state.workspaceStatus = 'idle';
   state.workspaceMessage = 'Unity workspace sync is not configured.';
+  state.githubConfigured = false;
+  state.githubSyncEnabled = false;
+  state.githubApplyEnabled = false;
+  state.githubStatus = 'idle';
+  state.githubMessage = 'GitHub Remote Workspace is not configured.';
+  state.githubLastSync = '';
+  state.githubLastCommit = '';
+  state.githubPullResults = [];
   state.commandEndpoint = '';
   state.currentCommand = null;
   state.status = 'unpaired';

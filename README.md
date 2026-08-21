@@ -1,40 +1,40 @@
-# Nexa AI Local Bridge 1.3.0
+# Nexa AI Local Bridge 1.4.0
 
-Windows companion for Nexa AI Computer Bridge on Hostinger.
+Windows companion for Nexa AI Computer Bridge.
 
-## Remote Unity Workspace
+## 1.4.0
 
-Version 1.3.0 adds an explicitly authorized Unity project mirror so a secret public Hostinger URL can be inspected from a ChatGPT Plus conversation without MCP.
+Adds **GitHub Remote Workspace** on top of the working Hostinger + Unity mirror.
 
-Mirrored information includes:
-- complete relevant Unity project structure (Assets, Packages, ProjectSettings and other project files; cache folders such as Library/Temp are excluded)
+The authorized Unity project can now be published to a dedicated GitHub branch so a connected ChatGPT Plus GitHub connector can inspect the project directly. Optional write-back can apply approved remote text edits into the local Unity project.
+
+### GitHub mirror includes
+
 - C# scripts
-- .unity scenes
+- `.unity` scenes
 - prefabs
-- shaders / shader graphs / HLSL / compute shaders
+- shaders / HLSL / shader graphs
 - materials
-- JSON, YAML, XML, asmdef, input actions and project settings
-- Unity Editor log tail
-- compilation errors
-- Play Mode / compilation / active-scene state
-- Scene View and Game View PNG captures through the optional Nexa Unity Editor integration
-- metadata for binary assets such as textures, audio and 3D models
+- JSON / YAML / XML / ProjectSettings / Packages
+- Unity Editor log and compile status
+- Play Mode state
+- project structure and binary-asset metadata
+- Scene View and Game View PNG captures when Screenshots permission is enabled
 
-## Security
-- outbound HTTPS only
-- pairing token stays encrypted through Electron safeStorage
-- Unity Project Paths must also be inside local Allowed Folders
-- Hostinger Read Files permission is required for workspace sync
-- Hostinger Screenshots permission is required to upload visual captures
-- public workspace is a mirror, not unrestricted C:/D:/ access
-- Emergency Stop blocks workspace uploads
+### Write-back safety
 
-## Workflow
-1. Connect to Hostinger.
-2. Add Allowed Folders.
-3. Add one or more Unity Project Paths.
-4. Enable Remote Unity Workspace sync.
-5. For visual captures, enable Screenshots on Hostinger and click Install Unity Integration.
-6. Keep Unity open and let the new Editor script compile.
-7. Click Capture Unity Views and then Sync Now, or enable automatic captures/sync.
-8. Generate the secret public workspace link from the Hostinger dashboard and share that exact URL with ChatGPT.
+- GitHub token is encrypted with Electron `safeStorage` and stays on the PC.
+- Remote write-back requires both the local **Apply ChatGPT edits back to Unity** toggle and Hostinger **Write Files** permission.
+- Writes are restricted to configured Unity project roots inside Allowed Folders.
+- Only approved Unity text formats are written automatically.
+- Local-vs-remote conflicts are never overwritten automatically.
+- Remote file deletions are ignored by design.
+- Generated `__NEXA__` data and `.nexa-bridge` files are never written back into the project from GitHub.
+
+### Recommended GitHub target
+
+- Repository: `somosanimales239-cmd/Nexa-AI-Local-Bridge`
+- Workspace branch: `nexa-unity-workspace`
+- Fine-grained token permission: **Contents: Read and write** for the selected repository.
+
+The Hostinger mirror remains available and continues using the same pairing token and endpoint.

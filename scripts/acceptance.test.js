@@ -55,3 +55,11 @@ test('remote command activity is visible in the interface', () => {
   assert.match(renderer, /queueBadge/);
   assert.match(renderer, /No remote command is running/i);
 });
+
+test('GitHub Remote Workspace user flow is visible and wired', () => {
+  assert.match(html, /GitHub Remote Workspace/i);
+  assert.match(html, /Apply ChatGPT edits back to Unity/i);
+  assert.match(renderer, /saveGithubWorkspace/);
+  assert.match(renderer, /syncGithubWorkspaceNow/);
+  assert.match(main, /bridge:github-sync-now/);
+});

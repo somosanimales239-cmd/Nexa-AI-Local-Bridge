@@ -170,18 +170,26 @@ async function maybeUploadArtifacts(root, endpoint, token, uuid, screenshotPermi
   return uploaded;
 }
 
-async function syncUnityProject({root,allowedRoots,endpoint,token,screenshotPermission=false}) {
+async function buildUnityMirrorSnapshot({root,allowedRoots}) {
   const resolved=assertAllowedPath(root,allowedRoots);
   if (!isUnityProject(resolved)) throw new Error(`Not a Unity project: ${resolved}`);
-  const uuid=workspaceUuid(resolved), name=path.basename(resolved), syncId='sync_'+crypto.randomBytes(12).toString('hex');
-  const status=await unityStatus(resolved); const scanned=await scanProject(resolved);
+  const uuid=workspaceUuid(resolved), name=path.basename(resolved);
+  const status=await unityStatus(resolved);
+  const scanned=await scanProject(resolved);
   scanned.stats.compile_error_count=status.compile_error_count||0;
-  const rows=scanned.rows.concat(virtualLogRows(resolved,status)); scanned.stats.file_count=rows.length;
-  await beginWorkspaceSync(endpoint,token,{workspace_uuid:uuid,name,project_version:status.unity_version,sync_id:syncId,status,stats:scanned.stats});
-  for (const files of batchRows(rows)) await sendWorkspaceBatch(endpoint,token,{workspace_uuid:uuid,sync_id:syncId,files});
-  const artifacts=await maybeUploadArtifacts(resolved,endpoint,token,uuid,screenshotPermission);
-  await finishWorkspaceSync(endpoint,token,{workspace_uuid:uuid,sync_id:syncId,status,stats:scanned.stats});
-  return {workspace_uuid:uuid,name,file_count:rows.length,artifacts,status,stats:scanned.stats};
+  const rows=scanned.rows.concat(virtualLogRows(resolved,status));
+  scanned.stats.file_count=rows.length;
+  return {root:resolved,workspace_uuid:uuid,name,project_version:status.unity_version,status,stats:scanned.stats,rows};
+}
+
+async function syncUnityProject({root,allowedRoots,endpoint,token,screenshotPermission=false}) {
+  const snapshot=await buildUnityMirrorSnapshot({root,allowedRoots});
+  const syncId='sync_'+crypto.randomBytes(12).toString('hex');
+  await beginWorkspaceSync(endpoint,token,{workspace_uuid:snapshot.workspace_uuid,name:snapshot.name,project_version:snapshot.project_version,sync_id:syncId,status:snapshot.status,stats:snapshot.stats});
+  for (const files of batchRows(snapshot.rows)) await sendWorkspaceBatch(endpoint,token,{workspace_uuid:snapshot.workspace_uuid,sync_id:syncId,files});
+  const artifacts=await maybeUploadArtifacts(snapshot.root,endpoint,token,snapshot.workspace_uuid,screenshotPermission);
+  await finishWorkspaceSync(endpoint,token,{workspace_uuid:snapshot.workspace_uuid,sync_id:syncId,status:snapshot.status,stats:snapshot.stats});
+  return {workspace_uuid:snapshot.workspace_uuid,name:snapshot.name,file_count:snapshot.rows.length,artifacts,status:snapshot.status,stats:snapshot.stats};
 }
 
 const UNITY_PLUGIN = String.raw`using UnityEngine;
@@ -278,4 +286,4 @@ async function requestUnityCapture(root, allowedRoots) {
   return {ok:true};
 }
 
-module.exports={isUnityProject,projectVersion,scanProject,unityStatus,syncUnityProject,installUnityIntegration,requestUnityCapture,workspaceUuid};
+module.exports={isUnityProject,projectVersion,scanProject,unityStatus,buildUnityMirrorSnapshot,syncUnityProject,installUnityIntegration,requestUnityCapture,workspaceUuid};

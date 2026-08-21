@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('nexaBridge', Object.freeze({
   syncWorkspaceNow: () => ipcRenderer.invoke('bridge:workspace-sync-now'),
   installUnityIntegration: root => ipcRenderer.invoke('bridge:unity-install', root),
   captureUnityViews: root => ipcRenderer.invoke('bridge:unity-capture', root),
+  saveGithubWorkspace: payload => ipcRenderer.invoke('bridge:github-save', payload),
+  testGithubWorkspace: payload => ipcRenderer.invoke('bridge:github-test', payload),
+  syncGithubWorkspaceNow: () => ipcRenderer.invoke('bridge:github-sync-now'),
   onState: callback => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, state) => callback(state);

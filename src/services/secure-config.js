@@ -28,6 +28,11 @@ class SecureConfig {
       unityRoots: Array.isArray(raw.unityRoots) ? raw.unityRoots.filter(v => typeof v === 'string') : [],
       workspaceSyncEnabled: raw.workspaceSyncEnabled === true,
       autoCaptureUnity: raw.autoCaptureUnity === true,
+      githubRepo: typeof raw.githubRepo === 'string' ? raw.githubRepo : 'somosanimales239-cmd/Nexa-AI-Local-Bridge',
+      githubBranch: typeof raw.githubBranch === 'string' ? raw.githubBranch : 'nexa-unity-workspace',
+      githubSyncEnabled: raw.githubSyncEnabled === true,
+      githubApplyEnabled: raw.githubApplyEnabled === true,
+      githubConfigured: typeof raw.githubTokenEncrypted === 'string' && raw.githubTokenEncrypted.length > 0,
       paired: typeof raw.tokenEncrypted === 'string' && raw.tokenEncrypted.length > 0,
     };
   }
@@ -46,12 +51,49 @@ class SecureConfig {
     }
   }
 
+
+  getGithubToken() {
+    const raw = this.readRaw();
+    if (!raw.githubTokenEncrypted) return '';
+    if (!this.safeStorage.isEncryptionAvailable()) {
+      throw new Error('Secure GitHub token storage is unavailable on this Windows session.');
+    }
+    try {
+      return this.safeStorage.decryptString(Buffer.from(raw.githubTokenEncrypted, 'base64'));
+    } catch {
+      throw new Error('The stored GitHub token could not be decrypted.');
+    }
+  }
+
+  saveGithub({ repo, branch, token, syncEnabled, applyEnabled }) {
+    if (!this.safeStorage.isEncryptionAvailable()) throw new Error('Secure GitHub token storage is unavailable.');
+    const raw = this.readRaw();
+    let githubTokenEncrypted = raw.githubTokenEncrypted || '';
+    if (typeof token === 'string' && token.trim()) {
+      githubTokenEncrypted = this.safeStorage.encryptString(token.trim()).toString('base64');
+    }
+    if (!githubTokenEncrypted) throw new Error('Enter a GitHub fine-grained token before saving GitHub Workspace.');
+    const next = {
+      ...raw,
+      githubRepo: String(repo || '').trim(),
+      githubBranch: String(branch || '').trim(),
+      githubTokenEncrypted,
+      githubSyncEnabled: syncEnabled === true,
+      githubApplyEnabled: applyEnabled === true,
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    return this.publicConfig();
+  }
+
   savePairing({ endpoint, deviceLabel, token, autoConnect, startWithWindows, allowedRoots, unityRoots, workspaceSyncEnabled, autoCaptureUnity }) {
     if (!this.safeStorage.isEncryptionAvailable()) {
       throw new Error('Secure token storage is unavailable. The pairing token was not saved.');
     }
     const encrypted = this.safeStorage.encryptString(token).toString('base64');
+    const raw = this.readRaw();
     const next = {
+      ...raw,
       endpoint,
       deviceLabel,
       tokenEncrypted: encrypted,
@@ -80,6 +122,8 @@ class SecureConfig {
         : (Array.isArray(patch.unityRoots) ? patch.unityRoots : []),
       workspaceSyncEnabled: patch.workspaceSyncEnabled === undefined ? raw.workspaceSyncEnabled === true : patch.workspaceSyncEnabled === true,
       autoCaptureUnity: patch.autoCaptureUnity === undefined ? raw.autoCaptureUnity === true : patch.autoCaptureUnity === true,
+      githubSyncEnabled: patch.githubSyncEnabled === undefined ? raw.githubSyncEnabled === true : patch.githubSyncEnabled === true,
+      githubApplyEnabled: patch.githubApplyEnabled === undefined ? raw.githubApplyEnabled === true : patch.githubApplyEnabled === true,
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });

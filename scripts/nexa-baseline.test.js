@@ -34,6 +34,7 @@ test('pairing token is not stored in renderer localStorage or plaintext config',
   assert.doesNotMatch(rendererSource, /localStorage/);
   assert.match(secureConfigSource, /safeStorage\.encryptString/);
   assert.match(secureConfigSource, /safeStorage\.decryptString/);
+  assert.match(secureConfigSource, /githubTokenEncrypted/);
   assert.doesNotMatch(secureConfigSource, /token\s*:\s*token/);
 });
 
@@ -121,4 +122,8 @@ test('renderer exposes Allowed Folders and remote queue state', () => {
   assert.match(html, /Allowed Folders/i);
   assert.match(html, /Current Hostinger command/i);
   assert.match(rendererSource, /allowedRoots/);
+});
+
+test('GitHub tokens are redacted from local logs', () => {
+  assert.match(loggerSource, /GITHUB_TOKEN_REDACTED/);
 });

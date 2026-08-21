@@ -24,6 +24,8 @@ const els = {
   unityRoots: $('#unityRoots'), workspaceSyncEnabled: $('#workspaceSyncEnabled'), autoCaptureUnity: $('#autoCaptureUnity'),
   syncWorkspaceBtn: $('#syncWorkspaceBtn'), installUnityBtn: $('#installUnityBtn'), captureUnityBtn: $('#captureUnityBtn'),
   workspaceBadge: $('#workspaceBadge'), workspaceMessage: $('#workspaceMessage'), workspaceResults: $('#workspaceResults'),
+  githubBadge: $('#githubBadge'), githubRepo: $('#githubRepo'), githubBranch: $('#githubBranch'), githubToken: $('#githubToken'), githubTokenHint: $('#githubTokenHint'),
+  githubSyncEnabled: $('#githubSyncEnabled'), githubApplyEnabled: $('#githubApplyEnabled'), githubSaveBtn: $('#githubSaveBtn'), githubTestBtn: $('#githubTestBtn'), githubSyncBtn: $('#githubSyncBtn'), githubMessage: $('#githubMessage'), githubResults: $('#githubResults'),
 };
 
 let latestState = null;
@@ -72,7 +74,7 @@ function statusClass(status) {
 function render(state) {
   if (!state) return;
   latestState = state;
-  els.version.textContent = `v${text(state.version || '1.3.0')}`;
+  els.version.textContent = `v${text(state.version || '1.4.0')}`;
   els.statusText.textContent = text((state.status || 'offline').replaceAll('-', ' ').toUpperCase());
   els.statusPill.className = `status-pill ${statusClass(state.status)}`;
   els.statusMessage.textContent = text(state.statusMessage || '');
@@ -99,12 +101,20 @@ function render(state) {
     els.deviceLabel.value = state.deviceLabel || 'Main Windows PC';
     els.allowedRoots.value = Array.isArray(state.allowedRoots) ? state.allowedRoots.join('\n') : '';
     els.unityRoots.value = Array.isArray(state.unityRoots) ? state.unityRoots.join('\n') : '';
+    els.githubRepo.value = state.githubRepo || 'somosanimales239-cmd/Nexa-AI-Local-Bridge';
+    els.githubBranch.value = state.githubBranch || 'nexa-unity-workspace';
   }
 
   els.autoConnect.checked = state.autoConnect === true;
   els.startWithWindows.checked = state.startWithWindows === true;
   els.workspaceSyncEnabled.checked = state.workspaceSyncEnabled === true;
   els.autoCaptureUnity.checked = state.autoCaptureUnity === true;
+  els.githubSyncEnabled.checked = state.githubSyncEnabled === true;
+  els.githubApplyEnabled.checked = state.githubApplyEnabled === true;
+  els.githubToken.placeholder = state.githubConfigured ? 'Stored securely — leave blank to reuse' : 'github_pat_...';
+  els.githubTokenHint.textContent = state.githubConfigured
+    ? 'GitHub token is stored with Electron safeStorage. Leave blank to reuse it. It is never sent to Hostinger.'
+    : 'Fine-grained token: Contents · Read and write for this repository. Stored only on this PC.';
   els.token.placeholder = state.paired ? 'Stored securely — leave blank to reuse' : 'nexa_...';
   els.tokenHint.textContent = state.paired
     ? 'A token is stored using Electron safeStorage. Leave this field blank to reuse it.'
@@ -128,6 +138,14 @@ function render(state) {
   els.workspaceMessage.textContent = text(state.workspaceMessage || '');
   const results = Array.isArray(state.workspaceResults) ? state.workspaceResults : [];
   els.workspaceResults.innerHTML = results.map(r => `<div class="workspace-result"><strong>${text(r.name)}</strong><span>${text(r.fileCount)} files · ${text(r.compileErrors)} compile errors</span><small>${Array.isArray(r.artifacts) && r.artifacts.length ? 'Visuals: '+r.artifacts.map(text).join(', ') : 'No new visuals uploaded'}</small></div>`).join('');
+
+  const ghStatus = state.githubStatus || 'idle';
+  els.githubBadge.textContent = ghStatus === 'syncing' ? 'Publishing' : ghStatus === 'synced' ? 'Synced' : ghStatus === 'ready' ? 'Ready' : ghStatus === 'error' ? 'Error' : 'Idle';
+  els.githubBadge.className = `chip ${ghStatus === 'synced' || ghStatus === 'ready' ? 'allowed' : ghStatus === 'syncing' ? 'warning' : ghStatus === 'error' ? 'danger' : 'blocked'}`;
+  els.githubMessage.textContent = text(state.githubMessage || '');
+  const ghPull = Array.isArray(state.githubPullResults) ? state.githubPullResults : [];
+  const commit = state.githubLastCommit ? `Commit ${text(state.githubLastCommit).slice(0,12)}` : 'No GitHub snapshot yet';
+  els.githubResults.innerHTML = `<div class="workspace-result"><strong>${text(state.githubRepo || '')}</strong><span>${text(state.githubBranch || '')} · ${commit}</span><small>${state.githubLastSync ? 'Last publish: '+formatTime(state.githubLastSync) : 'Not published yet'}</small></div>` + ghPull.map(r => `<div class="workspace-result"><strong>${text(r.name)}</strong><span>${text(r.applied || 0)} remote edits applied · ${text(r.conflicts || 0)} conflicts protected</span><small>Remote deletes are ignored by design</small></div>`).join('');
 }
 
 function payload() {
@@ -162,6 +180,8 @@ els.endpoint.addEventListener('input', () => { formTouched = true; });
 els.deviceLabel.addEventListener('input', () => { formTouched = true; });
 els.allowedRoots.addEventListener('input', () => { formTouched = true; });
 els.unityRoots.addEventListener('input', () => { formTouched = true; });
+els.githubRepo.addEventListener('input', () => { formTouched = true; });
+els.githubBranch.addEventListener('input', () => { formTouched = true; });
 
 els.testBtn.addEventListener('click', () => withBusy(els.testBtn, async () => {
   const result = await window.nexaBridge.testConnection(payload());
@@ -205,12 +225,16 @@ async function savePreferences() {
     unityRoots: els.unityRoots.value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
     workspaceSyncEnabled: els.workspaceSyncEnabled.checked,
     autoCaptureUnity: els.autoCaptureUnity.checked,
+    githubSyncEnabled: els.githubSyncEnabled.checked,
+    githubApplyEnabled: els.githubApplyEnabled.checked,
   });
 }
 els.autoConnect.addEventListener('change', savePreferences);
 els.startWithWindows.addEventListener('change', savePreferences);
 els.workspaceSyncEnabled.addEventListener('change', savePreferences);
 els.autoCaptureUnity.addEventListener('change', savePreferences);
+els.githubSyncEnabled.addEventListener('change', savePreferences);
+els.githubApplyEnabled.addEventListener('change', savePreferences);
 els.saveLocalBtn.addEventListener('click', async () => {
   await savePreferences();
   formTouched = false;
@@ -224,7 +248,9 @@ function firstUnityRoot() {
 els.syncWorkspaceBtn.addEventListener('click', () => withBusy(els.syncWorkspaceBtn, async () => {
   await savePreferences();
   const result = await window.nexaBridge.syncWorkspaceNow();
-  showTest(result.ok ? 'Unity workspace synchronized with Hostinger.' : `Workspace sync failed: ${result.error}`, !!result.ok);
+  if (!result.ok) return showTest(`Workspace sync failed: ${result.error}`, false);
+  const gh = result.github ? ' GitHub Remote Workspace was published too.' : result.githubError ? ` Hostinger sync succeeded, but GitHub failed: ${result.githubError}` : '';
+  showTest(`Unity workspace synchronized with Hostinger.${gh}`, !result.githubError);
 }));
 els.installUnityBtn.addEventListener('click', () => withBusy(els.installUnityBtn, async () => {
   await savePreferences();
@@ -239,6 +265,40 @@ els.captureUnityBtn.addEventListener('click', () => withBusy(els.captureUnityBtn
   if (!root) return showTest('Add a Unity Project Path first.', false);
   const result = await window.nexaBridge.captureUnityViews(root);
   showTest(result.ok ? 'Capture request sent. Keep Unity open, then click Sync Now after a few seconds.' : `Capture request failed: ${result.error}`, !!result.ok);
+}));
+
+
+function githubPayload() {
+  return {
+    repo: els.githubRepo.value.trim(),
+    branch: els.githubBranch.value.trim() || 'nexa-unity-workspace',
+    token: els.githubToken.value.trim(),
+    syncEnabled: els.githubSyncEnabled.checked,
+    applyEnabled: els.githubApplyEnabled.checked,
+  };
+}
+
+els.githubTestBtn.addEventListener('click', () => withBusy(els.githubTestBtn, async () => {
+  const result = await window.nexaBridge.testGithubWorkspace(githubPayload());
+  showTest(result.ok ? `GitHub connected: ${result.repository}.` : `GitHub test failed: ${result.error}`, !!result.ok);
+}));
+
+els.githubSaveBtn.addEventListener('click', () => withBusy(els.githubSaveBtn, async () => {
+  const result = await window.nexaBridge.saveGithubWorkspace(githubPayload());
+  if (result.ok) {
+    els.githubToken.value = '';
+    formTouched = false;
+    showTest('GitHub Remote Workspace verified and saved securely.', true);
+  } else showTest(`GitHub setup failed: ${result.error}`, false);
+}));
+
+els.githubSyncBtn.addEventListener('click', () => withBusy(els.githubSyncBtn, async () => {
+  await savePreferences();
+  const result = await window.nexaBridge.syncGithubWorkspaceNow();
+  if (!result.ok) return showTest(`GitHub publish failed: ${result.error}`, false);
+  const applied = (result.result?.pullResults || []).reduce((n,r)=>n+(r.applied||0),0);
+  const conflicts = (result.result?.pullResults || []).reduce((n,r)=>n+(r.conflicts||0),0);
+  showTest(`GitHub workspace published.${applied ? ` Applied ${applied} ChatGPT edit${applied===1?'':'s'} to Unity.` : ''}${conflicts ? ` Protected ${conflicts} local conflict${conflicts===1?'':'s'}.` : ''}`, true);
 }));
 
 window.nexaBridge.onState(render);

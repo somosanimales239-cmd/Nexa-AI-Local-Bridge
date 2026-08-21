@@ -12,6 +12,7 @@ const mainSource = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
 const preloadSource = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
 const clientSource = fs.readFileSync(path.join(root, 'src/services/bridge-client.js'), 'utf8');
 const executorSource = fs.readFileSync(path.join(root, 'src/services/read-only-executor.js'), 'utf8');
+const githubSource = fs.readFileSync(path.join(root, 'src/services/github-workspace.js'), 'utf8');
 const { BridgePolicy } = require(path.join(root, 'src/services/policy.js'));
 const { assertAllowedPath, executeReadOnlyCommand } = require(path.join(root, 'src/services/read-only-executor.js'));
 
@@ -31,7 +32,7 @@ test('Windows delivery has installer, portable and zip targets', () => {
 });
 
 test('main and preload share real bridge IPC channels', () => {
-  const channels = ['bridge:get-state','bridge:test','bridge:connect','bridge:disconnect','bridge:reconnect','bridge:update-preferences','bridge:unpair','bridge:open-logs'];
+  const channels = ['bridge:get-state','bridge:test','bridge:connect','bridge:disconnect','bridge:reconnect','bridge:update-preferences','bridge:unpair','bridge:open-logs','bridge:github-save','bridge:github-test','bridge:github-sync-now'];
   for (const channel of channels) {
     assert.ok(mainSource.includes(channel), `main.js missing ${channel}`);
     assert.ok(preloadSource.includes(channel), `preload.js missing ${channel}`);
@@ -102,4 +103,9 @@ test('read-only executor does not expose arbitrary command execution actions', (
   for (const forbidden of ["'cmd'", "'powershell'", "'python'", "'write_file'", "'delete_file'"]) {
     assert.equal(executorSource.includes(forbidden), false, `read-only executor unexpectedly contains ${forbidden}`);
   }
+});
+
+test('GitHub Remote Workspace has publish and guarded write-back runtime paths', () => {
+  for (const marker of ['publishGithubWorkspaces','applyRemoteChanges','writePermission','Remote deletes are intentionally not applied']) assert.ok(githubSource.includes(marker), marker);
+  assert.ok(mainSource.includes('policy.canExecute(\'write_files\')'));
 });
