@@ -137,7 +137,25 @@ function render(state) {
   els.workspaceBadge.className = `chip ${wsStatus === 'synced' ? 'allowed' : wsStatus === 'syncing' ? 'warning' : wsStatus === 'error' ? 'danger' : 'blocked'}`;
   els.workspaceMessage.textContent = text(state.workspaceMessage || '');
   const results = Array.isArray(state.workspaceResults) ? state.workspaceResults : [];
-  els.workspaceResults.innerHTML = results.map(r => `<div class="workspace-result"><strong>${text(r.name)}</strong><span>${text(r.fileCount)} files · ${text(r.compileErrors)} compile errors</span><small>${Array.isArray(r.artifacts) && r.artifacts.length ? 'Visuals: '+r.artifacts.map(text).join(', ') : 'No new visuals uploaded'}</small></div>`).join('');
+  els.workspaceResults.innerHTML = results.map(r => {
+    if (r.error) {
+      return `<div class="workspace-result"><strong>${text(r.name)}</strong><span>Sync skipped</span><small>${text(r.error)}</small></div>`;
+    }
+    const compileLabel = `${text(r.compileErrors || 0)} real compile error${Number(r.compileErrors || 0) === 1 ? '' : 's'}`;
+    const serviceLabel = `${text(r.serviceIssues || 0)} Unity service issue${Number(r.serviceIssues || 0) === 1 ? '' : 's'}`;
+    const repeated = Number(r.serviceIssueOccurrences || 0) > Number(r.serviceIssues || 0)
+      ? ` · ${text(r.serviceIssueOccurrences)} service events`
+      : '';
+    const plugin = r.pluginUpdateRequired
+      ? 'Unity integration update required — click Install Unity Integration once'
+      : r.pluginVersion
+        ? `Unity integration ${text(r.pluginVersion)}`
+        : 'Unity integration version not reported';
+    const visuals = Array.isArray(r.artifacts) && r.artifacts.length
+      ? `Visuals: ${r.artifacts.map(text).join(', ')}`
+      : 'No new visuals uploaded';
+    return `<div class="workspace-result"><strong>${text(r.name)}</strong><span>${text(r.fileCount)} files · ${compileLabel} · ${serviceLabel}${repeated}</span><small>${plugin} · ${visuals}</small></div>`;
+  }).join('');
 
   const ghStatus = state.githubStatus || 'idle';
   els.githubBadge.textContent = ghStatus === 'syncing' ? 'Publishing' : ghStatus === 'synced' ? 'Synced' : ghStatus === 'ready' ? 'Ready' : ghStatus === 'error' ? 'Error' : 'Idle';

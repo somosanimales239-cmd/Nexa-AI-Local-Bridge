@@ -127,3 +127,24 @@ test('renderer exposes Allowed Folders and remote queue state', () => {
 test('GitHub tokens are redacted from local logs', () => {
   assert.match(loggerSource, /GITHUB_TOKEN_REDACTED/);
 });
+
+test('Unity diagnostic module is part of the validated delivery and generated state is not mirrored twice', () => {
+  const diagnosticsPath = path.join(root, 'src/services/unity-diagnostics.js');
+  const unityWorkspaceSource = fs.readFileSync(path.join(root, 'src/services/unity-workspace.js'), 'utf8');
+  assert.equal(fs.existsSync(diagnosticsPath), true);
+  assert.match(packageJson.scripts?.validate || '', /unity-diagnostics\.js/);
+  assert.match(unityWorkspaceSource, /diagnostics\.json/);
+  assert.match(unityWorkspaceSource, /['"]\.nexa-bridge['"]/);
+});
+
+test('local logger redacts Unity access tokens and workspace secret keys too', () => {
+  assert.match(loggerSource, /UNITY_TOKEN_REDACTED/);
+  assert.match(loggerSource, /WORKSPACE_KEY_REDACTED/);
+  assert.match(loggerSource, /API_KEY_REDACTED/);
+});
+
+test('tray icon shipped in the Windows package is a valid PNG signature', () => {
+  const tray = fs.readFileSync(path.join(root, 'src/assets/tray.png'));
+  assert.deepEqual([...tray.subarray(0,8)], [137,80,78,71,13,10,26,10]);
+});
+

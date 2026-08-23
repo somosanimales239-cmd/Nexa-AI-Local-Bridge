@@ -1,14 +1,14 @@
 {
   "name": "nexa-ai-local-bridge",
-  "version": "1.4.0",
-  "description": "Secure Windows companion for Nexa AI Computer Bridge with Hostinger Unity mirroring plus GitHub Remote Workspace read/write workflow for ChatGPT Plus.",
+  "version": "1.5.0",
+  "description": "Secure Windows companion for Nexa AI Computer Bridge with Hostinger Unity mirroring, clean Unity diagnostics, secret-redacted logs, and GitHub Remote Workspace read/write workflow.",
   "main": "main.js",
   "author": "Nexa",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "validate": "node --check main.js && node --check preload.js && node --check src/app.js && node --check src/services/bridge-client.js && node --check src/services/workspace-client.js && node --check src/services/unity-workspace.js && node --check src/services/github-workspace.js && node --check src/services/secure-config.js && node --check src/services/system-info.js && node --check src/services/policy.js && node --check src/services/logger.js && node --check src/services/read-only-executor.js && npm run validate:delivery && npm run validate:project && npm test",
+    "validate": "node --check main.js && node --check preload.js && node --check src/app.js && node --check src/services/bridge-client.js && node --check src/services/workspace-client.js && node --check src/services/unity-diagnostics.js && node --check src/services/unity-workspace.js && node --check src/services/github-workspace.js && node --check src/services/secure-config.js && node --check src/services/system-info.js && node --check src/services/policy.js && node --check src/services/logger.js && node --check src/services/read-only-executor.js && npm run validate:delivery && npm run validate:project && npm test",
     "build:win": "npm run validate && electron-builder --win nsis portable zip --x64 --publish never",
     "build:linux": "npm run validate && electron-builder --linux AppImage deb --publish never",
     "build:mac": "npm run validate && electron-builder --mac dmg zip --publish never",

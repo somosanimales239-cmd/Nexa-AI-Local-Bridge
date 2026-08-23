@@ -63,3 +63,17 @@ test('GitHub Remote Workspace user flow is visible and wired', () => {
   assert.match(renderer, /syncGithubWorkspaceNow/);
   assert.match(main, /bridge:github-sync-now/);
 });
+
+test('Unity workspace continues syncing valid projects when another configured path is bad', () => {
+  assert.match(main, /failedResults/);
+  assert.match(main, /successfulRoots/);
+  assert.match(main, /Skipped .*invalid\/unavailable path/);
+  assert.match(main, /roots:\s*successfulRoots/);
+});
+
+test('Unity workspace UI separates real compile errors from Unity service issues', () => {
+  assert.match(renderer, /real compile error/);
+  assert.match(renderer, /Unity service issue/);
+  assert.match(renderer, /Unity integration update required/);
+});
+

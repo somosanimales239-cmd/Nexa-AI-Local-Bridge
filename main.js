@@ -189,33 +189,81 @@ async function workspaceSyncCycle(manual = false) {
   }
   broadcastState();
   const results = [];
+  const failedResults = [];
+  const successfulRoots = [];
   let githubResult = null;
   let githubError = null;
   try {
     for (const root of roots) {
-      if (cfg.autoCaptureUnity === true && policy.canExecute('screenshots')) {
-        try { await requestUnityCapture(root, cfg.allowedRoots); await new Promise(r => setTimeout(r, 1800)); } catch {}
+      try {
+        if (cfg.autoCaptureUnity === true && policy.canExecute('screenshots')) {
+          try { await requestUnityCapture(root, cfg.allowedRoots); await new Promise(r => setTimeout(r, 1800)); } catch {}
+        }
+        const result = await syncUnityProject({
+          root,
+          allowedRoots: cfg.allowedRoots,
+          endpoint,
+          token,
+          screenshotPermission: policy.canExecute('screenshots'),
+        });
+        results.push(result);
+        successfulRoots.push(root);
+        safeActivity('info', 'unity-workspace', `Synced ${result.name}: ${result.file_count} mirrored files.`);
+      } catch (error) {
+        const failed = {
+          name: path.basename(String(root || '')) || String(root || 'Unity project'),
+          root: String(root || ''),
+          error: error.message,
+        };
+        failedResults.push(failed);
+        safeActivity('warning', 'unity-workspace', `Skipped ${failed.name}: ${error.message}`);
       }
-      const result = await syncUnityProject({
-        root,
-        allowedRoots: cfg.allowedRoots,
-        endpoint,
-        token,
-        screenshotPermission: policy.canExecute('screenshots'),
-      });
-      results.push(result);
-      safeActivity('info', 'unity-workspace', `Synced ${result.name}: ${result.file_count} mirrored files.`);
     }
+
+    if (!results.length) {
+      state.workspaceStatus = 'error';
+      state.workspaceMessage = `No Unity project could be synchronized. ${failedResults.map(r => `${r.name}: ${r.error}`).join(' | ')}`;
+      state.workspaceResults = failedResults.map(r => ({ name:r.name, fileCount:0, compileErrors:0, serviceIssues:0, serviceIssueOccurrences:0, artifacts:[], error:r.error }));
+      broadcastState();
+      throw new Error(state.workspaceMessage);
+    }
+
     state.workspaceStatus = 'synced';
-    state.workspaceMessage = `Unity workspace synced: ${results.map(r => r.name).join(', ')}.`;
+    state.workspaceMessage = failedResults.length
+      ? `Unity workspace synced: ${results.map(r => r.name).join(', ')}. Skipped ${failedResults.length} invalid/unavailable path${failedResults.length === 1 ? '' : 's'}.`
+      : `Unity workspace synced: ${results.map(r => r.name).join(', ')}.`;
     state.lastWorkspaceSync = new Date().toISOString();
-    state.workspaceResults = results.map(r => ({ name:r.name, fileCount:r.file_count, compileErrors:r.stats?.compile_error_count || 0, artifacts:r.artifacts || [] }));
+    state.workspaceResults = [
+      ...results.map(r => ({
+        name:r.name,
+        fileCount:r.file_count,
+        compileErrors:r.stats?.compile_error_count || 0,
+        compileErrorOccurrences:r.stats?.compile_error_occurrences || 0,
+        serviceIssues:r.stats?.service_issue_count || 0,
+        serviceIssueOccurrences:r.stats?.service_issue_occurrences || 0,
+        licensingIssues:r.stats?.licensing_issue_count || 0,
+        licensingIssueOccurrences:r.stats?.licensing_issue_occurrences || 0,
+        health:r.status?.project_health || 'healthy',
+        pluginVersion:r.status?.plugin_version || '',
+        pluginUpdateRequired:r.status?.plugin_update_required === true,
+        artifacts:r.artifacts || [],
+      })),
+      ...failedResults.map(r => ({
+        name:r.name,
+        fileCount:0,
+        compileErrors:0,
+        serviceIssues:0,
+        serviceIssueOccurrences:0,
+        artifacts:[],
+        error:r.error,
+      })),
+    ];
 
     if (cfg.githubSyncEnabled) {
       try {
         if (!cfg.githubConfigured) throw new Error('Save a GitHub token before enabling GitHub Remote Workspace.');
         githubResult = await publishGithubWorkspaces({
-          roots,
+          roots: successfulRoots,
           allowedRoots: cfg.allowedRoots,
           repo: cfg.githubRepo,
           branch: cfg.githubBranch,
