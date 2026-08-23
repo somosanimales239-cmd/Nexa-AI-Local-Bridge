@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld('nexaBridge', Object.freeze({
   saveGithubWorkspace: payload => ipcRenderer.invoke('bridge:github-save', payload),
   testGithubWorkspace: payload => ipcRenderer.invoke('bridge:github-test', payload),
   syncGithubWorkspaceNow: () => ipcRenderer.invoke('bridge:github-sync-now'),
+  saveRemoteInbox: payload => ipcRenderer.invoke('bridge:remote-inbox-save', payload),
+  testRemoteInbox: payload => ipcRenderer.invoke('bridge:remote-inbox-test', payload),
+  checkRemoteInboxNow: () => ipcRenderer.invoke('bridge:remote-inbox-check-now'),
+  clearRemoteInbox: () => ipcRenderer.invoke('bridge:remote-inbox-clear'),
   onState: callback => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, state) => callback(state);

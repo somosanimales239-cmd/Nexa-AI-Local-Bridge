@@ -15,7 +15,7 @@ const {
   DIAGNOSTICS_SCHEMA_VERSION,
 } = require('./unity-diagnostics');
 
-const BRIDGE_PLUGIN_VERSION = '1.5.0';
+const BRIDGE_PLUGIN_VERSION = '1.6.0';
 const TEXT_EXT = new Set(['.cs','.unity','.prefab','.shader','.shadergraph','.mat','.json','.asmdef','.asmref','.xml','.yaml','.yml','.txt','.md','.cginc','.hlsl','.compute','.uss','.uxml','.inputactions','.controller','.anim','.meta','.asset','.rsp','.props','.csproj','.sln','.gitignore']);
 const EXCLUDED_DIRS = new Set(['library','temp','obj','.git','.vs','memorycaptures','.nexa-bridge']);
 const MAX_FILES = 30000;
@@ -292,6 +292,30 @@ function virtualLogRows(root,status) {
     content_text:statusText,
   });
 
+  for (const [sourceName,remoteName] of [
+    ['remote-channel.json','remote-channel.json'],
+    ['remote-command-status.json','remote-command-status.json'],
+    ['remote-command-history.json','remote-command-history.json'],
+    ['unity-command-result.json','unity-command-result.json'],
+  ]) {
+    const file = path.join(root,'.nexa-bridge',sourceName);
+    if (!fs.existsSync(file)) continue;
+    try {
+      const content = fs.readFileSync(file,'utf8');
+      if (Buffer.byteLength(content) > 512 * 1024) continue;
+      rows.push({
+        relative_path:`__NEXA__/${remoteName}`,
+        file_kind:'config',
+        extension:'.json',
+        size_bytes:Buffer.byteLength(content),
+        modified_at:new Date().toISOString(),
+        sha256:sha256(content),
+        is_text:true,
+        content_text:content,
+      });
+    } catch {}
+  }
+
   return rows;
 }
 
@@ -420,6 +444,7 @@ async function syncUnityProject({root,allowedRoots,endpoint,token,screenshotPerm
 const UNITY_PLUGIN = String.raw`using UnityEngine;
 using UnityEditor;
 using UnityEditor.Compilation;
+using UnityEditor.SceneManagement;
 using UnityEngine.SceneManagement;
 using System;
 using System.IO;
@@ -428,11 +453,22 @@ using System.Collections.Generic;
 
 [InitializeOnLoad]
 public static class NexaUnityBridge {
-    public const string NEXA_BRIDGE_PLUGIN_VERSION = "1.5.0";
+    public const string NEXA_BRIDGE_PLUGIN_VERSION = "1.6.0";
+
+    [Serializable]
+    class BridgeRequest {
+        public string request_id;
+        public string action;
+        public bool capture_scene;
+        public bool capture_game;
+        public string scene_path;
+        public string menu_item;
+    }
 
     static string Root => Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
     static string Dir => Path.Combine(Root, ".nexa-bridge");
     static string RequestFile => Path.Combine(Dir, "request.json");
+    static string CommandResultFile => Path.Combine(Dir, "unity-command-result.json");
     static string CompileErrorsFile => Path.Combine(Dir, "compile-errors.json");
     static string CompileStateFile => Path.Combine(Dir, "compile-state.json");
 
@@ -447,35 +483,71 @@ public static class NexaUnityBridge {
         CompilationPipeline.compilationStarted += OnCompilationStarted;
         CompilationPipeline.assemblyCompilationFinished += OnAssemblyCompiled;
         CompilationPipeline.compilationFinished += OnCompilationFinished;
-
         WriteCompileErrors();
         WriteCompileState("idle");
         WriteState();
     }
 
     static void Tick() {
-        if ((DateTime.UtcNow-lastTick).TotalSeconds < 2) return;
+        if ((DateTime.UtcNow-lastTick).TotalSeconds < 0.75) return;
         lastTick=DateTime.UtcNow;
         WriteState();
-
         try {
             if (!File.Exists(RequestFile)) return;
             var wt=File.GetLastWriteTimeUtc(RequestFile);
             if (wt<=lastRequestWrite) return;
             lastRequestWrite=wt;
-
             var text=File.ReadAllText(RequestFile);
-            var errorFile=Path.Combine(Dir,"capture-error.txt");
-            if(File.Exists(errorFile)) File.Delete(errorFile);
-            if (text.Contains("capture_scene")) CaptureScene();
-            if (text.Contains("capture_game")) CaptureGame();
-            File.WriteAllText(
-                Path.Combine(Dir,"capture-result.json"),
-                "{\"ok\":true,\"updated_at\":\""+DateTime.UtcNow.ToString("o")+"\"}"
-            );
+            var request=JsonUtility.FromJson<BridgeRequest>(text) ?? new BridgeRequest();
+            ExecuteRequest(request);
         } catch(Exception e) {
-            File.WriteAllText(Path.Combine(Dir,"capture-error.txt"),e.ToString());
+            WriteCommandResult("", false, e.ToString());
         }
+    }
+
+    static void ExecuteRequest(BridgeRequest request) {
+        string action=(request.action??"").Trim().ToLowerInvariant();
+        try {
+            if (request.capture_scene || action=="capture_scene" || action=="capture_views") CaptureScene();
+            if (request.capture_game || action=="capture_game" || action=="capture_views") CaptureGame();
+            switch(action) {
+                case "": break;
+                case "capture_scene":
+                case "capture_game":
+                case "capture_views": break;
+                case "refresh_assets": AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate); break;
+                case "save_assets": AssetDatabase.SaveAssets(); break;
+                case "play": if(!EditorApplication.isPlaying) EditorApplication.isPlaying=true; break;
+                case "stop": if(EditorApplication.isPlaying) EditorApplication.isPlaying=false; break;
+                case "pause": EditorApplication.isPaused=true; break;
+                case "unpause": EditorApplication.isPaused=false; break;
+                case "save_scene":
+                    if(SceneManager.GetActiveScene().IsValid()) EditorSceneManager.SaveScene(SceneManager.GetActiveScene());
+                    break;
+                case "open_scene":
+                    if(string.IsNullOrWhiteSpace(request.scene_path)) throw new Exception("scene_path is required");
+                    EditorSceneManager.OpenScene(request.scene_path, OpenSceneMode.Single);
+                    break;
+                case "execute_menu_item":
+                    if(string.IsNullOrWhiteSpace(request.menu_item)) throw new Exception("menu_item is required");
+                    if(!EditorApplication.ExecuteMenuItem(request.menu_item)) throw new Exception("Unity menu item was not found or could not execute: "+request.menu_item);
+                    break;
+                default: throw new Exception("Unsupported Nexa Unity action: "+action);
+            }
+            WriteState();
+            WriteCommandResult(request.request_id, true, "");
+        } catch(Exception e) {
+            WriteCommandResult(request.request_id, false, e.ToString());
+        }
+    }
+
+    static void WriteCommandResult(string requestId,bool ok,string error) {
+        var json="{"+
+            "\"request_id\":\""+Escape(requestId)+"\","+
+            "\"ok\":"+(ok?"true":"false")+","+
+            "\"error\":\""+Escape(error)+"\","+
+            "\"updated_at\":\""+DateTime.UtcNow.ToString("o")+"\"}";
+        File.WriteAllText(CommandResultFile,json);
     }
 
     static void WriteState() {
@@ -493,10 +565,7 @@ public static class NexaUnityBridge {
     }
 
     static void OnPlayMode(PlayModeStateChange state) {
-        File.WriteAllText(
-            Path.Combine(Dir,"playmode.json"),
-            "{\"last_event\":\""+state+"\",\"updated_at\":\""+DateTime.UtcNow.ToString("o")+"\"}"
-        );
+        File.WriteAllText(Path.Combine(Dir,"playmode.json"),"{\"last_event\":\""+state+"\",\"updated_at\":\""+DateTime.UtcNow.ToString("o")+"\"}");
         WriteState();
     }
 
@@ -513,11 +582,7 @@ public static class NexaUnityBridge {
             var message=m.file+"("+m.line+","+m.column+"): "+m.message;
             if(!compileErrors.Contains(message)) compileErrors.Add(message);
         }
-
-        if(compileErrors.Count>100) {
-            compileErrors.RemoveRange(0,compileErrors.Count-100);
-        }
-
+        if(compileErrors.Count>100) compileErrors.RemoveRange(0,compileErrors.Count-100);
         WriteCompileErrors();
         WriteCompileState("compiling");
         WriteState();
@@ -537,31 +602,18 @@ public static class NexaUnityBridge {
             var code="";
             var match=System.Text.RegularExpressions.Regex.Match(msg, @"\bCS\d+\b");
             if(match.Success) code=match.Value;
-
-            sb.Append("{\"message\":\"")
-              .Append(Escape(msg))
-              .Append("\",\"code\":\"")
-              .Append(Escape(code))
-              .Append("\"}");
+            sb.Append("{\"message\":\"").Append(Escape(msg)).Append("\",\"code\":\"").Append(Escape(code)).Append("\"}");
         }
         sb.Append(']');
         File.WriteAllText(CompileErrorsFile,sb.ToString());
     }
 
     static void WriteCompileState(string phase) {
-        File.WriteAllText(
-            CompileStateFile,
-            "{\"phase\":\""+Escape(phase)+"\",\"error_count\":"+compileErrors.Count+
-            ",\"updated_at\":\""+DateTime.UtcNow.ToString("o")+"\"}"
-        );
+        File.WriteAllText(CompileStateFile,"{\"phase\":\""+Escape(phase)+"\",\"error_count\":"+compileErrors.Count+",\"updated_at\":\""+DateTime.UtcNow.ToString("o")+"\"}");
     }
 
     static string Escape(string s) {
-        return (s??"")
-            .Replace("\\","\\\\")
-            .Replace("\"","\\\"")
-            .Replace("\r","\\r")
-            .Replace("\n","\\n");
+        return (s??"").Replace("\\","\\\\").Replace("\"","\\\"").Replace("\r","\\r").Replace("\n","\\n");
     }
 
     static void CaptureScene() {
@@ -586,25 +638,16 @@ public static class NexaUnityBridge {
         var oldActive=RenderTexture.active;
         var rt=new RenderTexture(width,height,24,RenderTextureFormat.ARGB32);
         var tex=new Texture2D(width,height,TextureFormat.RGB24,false);
-
         try {
-            cam.targetTexture=rt;
-            cam.Render();
-            RenderTexture.active=rt;
-            tex.ReadPixels(new Rect(0,0,width,height),0,0);
-            tex.Apply();
-            File.WriteAllBytes(file,tex.EncodeToPNG());
-        }
-        finally {
-            cam.targetTexture=oldTarget;
-            RenderTexture.active=oldActive;
-            UnityEngine.Object.DestroyImmediate(tex);
-            rt.Release();
-            UnityEngine.Object.DestroyImmediate(rt);
+            cam.targetTexture=rt; cam.Render(); RenderTexture.active=rt;
+            tex.ReadPixels(new Rect(0,0,width,height),0,0); tex.Apply(); File.WriteAllBytes(file,tex.EncodeToPNG());
+        } finally {
+            cam.targetTexture=oldTarget; RenderTexture.active=oldActive;
+            UnityEngine.Object.DestroyImmediate(tex); rt.Release(); UnityEngine.Object.DestroyImmediate(rt);
         }
     }
 }
-`;
+`
 
 async function installUnityIntegration(root, allowedRoots) {
   const resolved = assertAllowedPath(root,allowedRoots);
@@ -641,6 +684,42 @@ async function requestUnityCapture(root, allowedRoots) {
   return {ok:true,request_id:requestId};
 }
 
+async function requestUnityAction(root, allowedRoots, request = {}) {
+  const resolved = assertAllowedPath(root,allowedRoots);
+  if (!isUnityProject(resolved)) throw new Error(`Not a Unity project: ${resolved}`);
+  const dir = path.join(resolved,'.nexa-bridge');
+  await fs.promises.mkdir(dir,{recursive:true});
+  const requestId = String(request.request_id || crypto.randomBytes(10).toString('hex'));
+  const resultFile = path.join(dir,'unity-command-result.json');
+  try { await fs.promises.rm(resultFile,{force:true}); } catch {}
+  const payload = {
+    request_id:requestId,
+    action:String(request.action || ''),
+    capture_scene:request.capture_scene === true,
+    capture_game:request.capture_game === true,
+    scene_path:String(request.scene_path || ''),
+    menu_item:String(request.menu_item || ''),
+    requested_at:new Date().toISOString(),
+  };
+  await fs.promises.writeFile(path.join(dir,'request.json'),JSON.stringify(payload,null,2),'utf8');
+  const timeoutMs = Math.max(1500,Math.min(Number(request.timeout_ms || 15000),60000));
+  const start=Date.now();
+  while(Date.now()-start<timeoutMs){
+    try{
+      if(fs.existsSync(resultFile)){
+        const result=readJson(resultFile,{});
+        if(result.request_id===requestId){
+          if(result.ok===false) throw new Error(result.error || `Unity action failed: ${payload.action}`);
+          return {ok:true,request_id:requestId,action:payload.action,updated_at:result.updated_at || ''};
+        }
+      }
+    }catch(error){ if(/Unity action failed|Unsupported Nexa Unity action|menu item|scene_path/i.test(error.message)) throw error; }
+    await new Promise(resolve=>setTimeout(resolve,250));
+  }
+  return {ok:true,request_id:requestId,action:payload.action,pending:true,note:'Unity did not acknowledge before timeout; request remains queued in .nexa-bridge/request.json.'};
+}
+
+
 module.exports={
   BRIDGE_PLUGIN_VERSION,
   isUnityProject,
@@ -651,5 +730,6 @@ module.exports={
   syncUnityProject,
   installUnityIntegration,
   requestUnityCapture,
+  requestUnityAction,
   workspaceUuid,
 };

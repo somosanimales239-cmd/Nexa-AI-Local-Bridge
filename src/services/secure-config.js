@@ -33,6 +33,14 @@ class SecureConfig {
       githubSyncEnabled: raw.githubSyncEnabled === true,
       githubApplyEnabled: raw.githubApplyEnabled === true,
       githubConfigured: typeof raw.githubTokenEncrypted === 'string' && raw.githubTokenEncrypted.length > 0,
+      remoteInboxEnabled: raw.remoteInboxEnabled === true,
+      remoteInboxHost: typeof raw.remoteInboxHost === 'string' && raw.remoteInboxHost.trim() ? raw.remoteInboxHost.trim() : 'pop.hostinger.com',
+      remoteInboxPort: Number.isInteger(raw.remoteInboxPort) ? raw.remoteInboxPort : 995,
+      remoteInboxUsername: typeof raw.remoteInboxUsername === 'string' ? raw.remoteInboxUsername : '',
+      remoteInboxAllowedSender: typeof raw.remoteInboxAllowedSender === 'string' ? raw.remoteInboxAllowedSender : '',
+      remoteInboxPollSeconds: Number.isFinite(raw.remoteInboxPollSeconds) ? Math.max(10, Math.min(Number(raw.remoteInboxPollSeconds), 300)) : 15,
+      remoteInboxRequireAuth: raw.remoteInboxRequireAuth !== false,
+      remoteInboxConfigured: typeof raw.remoteInboxPasswordEncrypted === 'string' && raw.remoteInboxPasswordEncrypted.length > 0,
       paired: typeof raw.tokenEncrypted === 'string' && raw.tokenEncrypted.length > 0,
     };
   }
@@ -86,6 +94,60 @@ class SecureConfig {
     return this.publicConfig();
   }
 
+  getRemoteInboxPassword() {
+    const raw = this.readRaw();
+    if (!raw.remoteInboxPasswordEncrypted) return '';
+    if (!this.safeStorage.isEncryptionAvailable()) {
+      throw new Error('Secure Remote Command Inbox password storage is unavailable on this Windows session.');
+    }
+    try {
+      return this.safeStorage.decryptString(Buffer.from(raw.remoteInboxPasswordEncrypted, 'base64'));
+    } catch {
+      throw new Error('The stored Remote Command Inbox password could not be decrypted.');
+    }
+  }
+
+  saveRemoteInbox({ enabled, host, port, username, password, allowedSender, pollSeconds, requireAuth }) {
+    if (!this.safeStorage.isEncryptionAvailable()) throw new Error('Secure Remote Command Inbox password storage is unavailable.');
+    const raw = this.readRaw();
+    let encrypted = raw.remoteInboxPasswordEncrypted || '';
+    if (typeof password === 'string' && password.trim()) {
+      encrypted = this.safeStorage.encryptString(password).toString('base64');
+    }
+    if (!encrypted) throw new Error('Enter the password for the dedicated command mailbox before saving.');
+    const cleanHost = String(host || '').trim();
+    const cleanUser = String(username || '').trim();
+    const cleanSender = String(allowedSender || '').trim();
+    const cleanPort = Number(port || 995);
+    if (!/^[A-Za-z0-9.-]+$/.test(cleanHost)) throw new Error('Enter a valid POP3 host.');
+    if (!Number.isInteger(cleanPort) || cleanPort < 1 || cleanPort > 65535) throw new Error('Enter a valid POP3 port.');
+    if (!cleanUser || !cleanSender) throw new Error('Command mailbox username and allowed sender are required.');
+    const next = {
+      ...raw,
+      remoteInboxEnabled: enabled === true,
+      remoteInboxHost: cleanHost,
+      remoteInboxPort: cleanPort,
+      remoteInboxUsername: cleanUser,
+      remoteInboxPasswordEncrypted: encrypted,
+      remoteInboxAllowedSender: cleanSender,
+      remoteInboxPollSeconds: Math.max(10, Math.min(Number(pollSeconds || 15), 300)),
+      remoteInboxRequireAuth: requireAuth !== false,
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    return this.publicConfig();
+  }
+
+  clearRemoteInbox() {
+    const raw = this.readRaw();
+    const next = { ...raw };
+    delete next.remoteInboxPasswordEncrypted;
+    next.remoteInboxEnabled = false;
+    next.updatedAt = new Date().toISOString();
+    fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    return this.publicConfig();
+  }
+
   savePairing({ endpoint, deviceLabel, token, autoConnect, startWithWindows, allowedRoots, unityRoots, workspaceSyncEnabled, autoCaptureUnity }) {
     if (!this.safeStorage.isEncryptionAvailable()) {
       throw new Error('Secure token storage is unavailable. The pairing token was not saved.');
@@ -124,6 +186,7 @@ class SecureConfig {
       autoCaptureUnity: patch.autoCaptureUnity === undefined ? raw.autoCaptureUnity === true : patch.autoCaptureUnity === true,
       githubSyncEnabled: patch.githubSyncEnabled === undefined ? raw.githubSyncEnabled === true : patch.githubSyncEnabled === true,
       githubApplyEnabled: patch.githubApplyEnabled === undefined ? raw.githubApplyEnabled === true : patch.githubApplyEnabled === true,
+      remoteInboxEnabled: patch.remoteInboxEnabled === undefined ? raw.remoteInboxEnabled === true : patch.remoteInboxEnabled === true,
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });

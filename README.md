@@ -1,64 +1,97 @@
-# Nexa AI Local Bridge 1.5.0
+# Nexa AI Local Bridge 1.6.0
 
 Windows companion for Nexa AI Computer Bridge.
 
-## 1.5.0 — Unity Diagnostics Quality Update
+## 1.6.0 — Direct Remote Work Channel
 
-This release keeps the existing Hostinger + Unity + GitHub Remote Workspace workflow and improves the diagnostic layer so Unity service noise is no longer reported as gameplay/compiler failure.
+This release keeps the working Hostinger + Unity + GitHub mirror from 1.5.0 and adds a separate, transactional Remote Command Inbox so remote work no longer depends on GitHub file-write permissions.
 
-### Clean compiler diagnostics
+### New secure Remote Command Inbox
 
-- Unity Licensing / entitlement 404 messages are no longer counted as C# compile errors.
-- Real compiler errors are detected with narrow Unity/C# patterns instead of a broad generic `Error:` match.
-- Repeated identical compiler errors are deduplicated and keep an occurrence count.
-- Unity plugin compiler messages and Editor.log compiler messages are merged safely.
-- `compile_error_count` now represents distinct real compile errors.
-- `compile_error_occurrences` preserves how many times those errors appeared.
+- Polls a dedicated POP3S mailbox over TLS.
+- Accepts only messages with subject prefix `[NEXA-CMD]`.
+- Enforces an allowlisted sender.
+- Can require SPF/DKIM/DMARC pass evidence from received headers.
+- Uses a rotating local channel challenge so copied or stale command packages are rejected.
+- Enforces command IDs, expiration windows and replay protection.
+- Stores mailbox password encrypted with Electron `safeStorage`.
+- Never publishes mailbox credentials to Hostinger or GitHub.
+- Writes only redacted command/result summaries into the mirrored `__NEXA__` status files.
 
-### Unity service issues are separate
+### Remote work engine
 
-The mirror now publishes service/environment issues separately from compile errors:
+A valid command package can perform permission-gated batches of actions, including:
 
-- Unity Licensing
-- Package Manager
-- Unity Services
-- connectivity/service diagnostics
+- computer status, drives, folders and file reads;
+- text and binary file writes;
+- create/copy/move/delete paths;
+- CMD, PowerShell, Python and Git commands;
+- explicit process execution when Full Computer Mode is enabled;
+- HTTPS file downloads into Allowed Folders;
+- Unity refresh, capture, play/stop/pause, scene open/save;
+- Unity menu item execution;
+- Unity Editor jobs;
+- wait for Unity compilation and collect real compiler diagnostics.
 
-`__NEXA__/diagnostics.json` contains the clean diagnostic summary, while `__NEXA__/unity-status.json` contains the full current Unity state.
+Every action still requires the corresponding Hostinger permission and is restricted to configured Allowed Folders where applicable.
 
-### Security hardening
+### Transactional safety
 
-The mirrored `__NEXA__/UnityEditor.log` is now sanitized before it leaves the PC. The sanitizer redacts common sensitive values including:
+- Multi-file jobs run as one transaction.
+- Existing files/folders are backed up before mutation.
+- Failed actions automatically roll back prior changes unless explicitly disabled.
+- Optional Unity compile verification can automatically roll back a completed batch if real compiler errors appear.
+- SHA-256 preconditions can protect files against overwriting concurrent local edits.
+- Symlink/junction escapes outside Allowed Folders are blocked.
+- Deleting or moving an Allowed Folder root itself is blocked.
+- Backup transactions are capped to avoid accidental huge local copies.
 
-- Unity `-accessToken`
-- Bearer authorization values
-- GitHub PAT formats
-- Nexa pairing-token patterns
-- public-workspace secret keys
-- API-key style values
-- the Windows username portion of `C:\Users\...`
+### Unity integration
 
-The local Unity Editor log itself is not modified.
+The Unity bridge can now receive explicit local requests for:
 
-### Unity integration plugin 1.5.0
+- AssetDatabase refresh;
+- Scene/Game capture;
+- Play/Stop/Pause/Unpause;
+- open/save scene;
+- execute Unity menu item;
+- run a temporary Unity Editor job;
+- wait for compilation and return clean diagnostics.
 
-Reinstall **Unity Integration** once after installing this release.
+The 1.5.0 diagnostic improvements remain intact: Licensing/service noise is kept separate from real C#/shader compile errors.
 
-The plugin now:
+### GitHub remains the read/verification mirror
 
-- clears stale compiler errors when a new compilation starts;
-- records compilation phase and last update;
-- deduplicates compiler errors at the Unity source;
-- reports its plugin version;
-- writes capture result/error state;
-- uses the current Unity object-search API on Unity 2022.2+ to avoid the obsolete `FindObjectOfType` warning.
+GitHub Remote Workspace remains available for:
 
-### Existing 1.4.0 features retained
+- C# scripts and Unity text assets;
+- ProjectSettings / Packages;
+- clean compile diagnostics;
+- scene/game screenshots;
+- verification snapshots that ChatGPT can inspect.
 
-- Hostinger secure heartbeat and policy
-- Unity project mirror
-- Scene View and Game View captures
-- GitHub Remote Workspace publishing
-- optional guarded text write-back
-- conflict protection
-- Electron `safeStorage` for local secrets
+The old GitHub write-back switch remains only as a compatibility option. For direct remote work use the Remote Command Inbox instead, because it does not depend on ChatGPT's GitHub connector having repository file-write permission.
+
+## One-time setup after installing 1.6.0
+
+1. Keep your existing Hostinger pairing and Allowed Folders.
+2. Keep your Unity Project Path configured.
+3. Reinstall **Unity Integration** once from the Windows app so the Unity-side command handler is current.
+4. Configure a dedicated POP3S mailbox in **Remote Command Inbox**.
+5. Set the allowed sender email address.
+6. Leave **Require authenticated sender** enabled unless your mail provider cannot expose SPF/DKIM/DMARC results through POP headers.
+7. Test the mailbox from the app.
+8. Enable **Remote Command Inbox**.
+9. Keep the Hostinger permissions you want remote jobs to use enabled. Emergency Stop always overrides all remote work.
+
+## Recommended operating mode
+
+- GitHub workspace publishing: ON for read/verification snapshots.
+- Legacy GitHub write-back: OFF.
+- Remote Command Inbox: ON after mailbox test passes.
+- Apply only the Hostinger permissions required for the current work.
+- Use Full Computer Mode only when a job genuinely needs arbitrary process execution outside the narrower built-in actions.
+
+## Validation
+
+The 1.6.0 source package includes syntax checks, delivery graph validation, project validation, baseline tests, implementation tests and acceptance tests covering the Remote Command Inbox, transactional executor, Unity integration, diagnostics, security gates, path restrictions and rollback behavior.

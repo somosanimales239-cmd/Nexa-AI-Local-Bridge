@@ -17,14 +17,49 @@ function normalizeRoot(value) {
   return path.resolve(raw).replace(/[\\/]+$/, '').toLowerCase();
 }
 
+function pathWithin(targetKey, rootKey) {
+  if (!targetKey || !rootKey) return false;
+  return targetKey === rootKey || targetKey.startsWith(rootKey + path.sep.toLowerCase());
+}
+
+function nearestExistingAncestor(target) {
+  let current = path.resolve(target);
+  const suffix = [];
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    suffix.unshift(path.basename(current));
+    current = parent;
+  }
+  return { ancestor: current, suffix };
+}
+
+function canonicalCandidate(target) {
+  const resolved = path.resolve(target);
+  try {
+    if (fs.existsSync(resolved)) return fs.realpathSync.native ? fs.realpathSync.native(resolved) : fs.realpathSync(resolved);
+  } catch {}
+  const { ancestor, suffix } = nearestExistingAncestor(resolved);
+  let realAncestor = ancestor;
+  try { realAncestor = fs.realpathSync.native ? fs.realpathSync.native(ancestor) : fs.realpathSync(ancestor); } catch {}
+  return path.resolve(realAncestor, ...suffix);
+}
+
 function assertAllowedPath(target, allowedRoots) {
-  const resolved = path.resolve(String(target || '').trim());
-  if (!resolved) throw new Error('A path is required.');
+  const raw = String(target || '').trim();
+  if (!raw) throw new Error('A path is required.');
+  const resolved = path.resolve(raw);
   const targetKey = resolved.toLowerCase();
-  const roots = (Array.isArray(allowedRoots) ? allowedRoots : []).map(normalizeRoot).filter(Boolean);
+  const roots = (Array.isArray(allowedRoots) ? allowedRoots : []).map(value => path.resolve(String(value || '').trim())).filter(Boolean);
   if (!roots.length) throw new Error('No Allowed Folders are configured in Nexa AI Local Bridge.');
-  const allowed = roots.some(root => targetKey === root || targetKey.startsWith(root + path.sep.toLowerCase()));
-  if (!allowed) throw new Error(`Blocked by local Allowed Folders policy: ${resolved}`);
+
+  const lexicalAllowed = roots.some(root => pathWithin(targetKey, normalizeRoot(root)));
+  if (!lexicalAllowed) throw new Error(`Blocked by local Allowed Folders policy: ${resolved}`);
+
+  const canonicalTarget = canonicalCandidate(resolved).toLowerCase();
+  const canonicalRoots = roots.map(root => canonicalCandidate(root).replace(/[\\/]+$/, '').toLowerCase());
+  const canonicalAllowed = canonicalRoots.some(root => pathWithin(canonicalTarget, root));
+  if (!canonicalAllowed) throw new Error(`Blocked because the path resolves outside Allowed Folders (junction/symlink protection): ${resolved}`);
   return resolved;
 }
 
@@ -153,4 +188,4 @@ async function executeReadOnlyCommand(command, context) {
   }
 }
 
-module.exports = { SUPPORTED_ACTIONS, assertAllowedPath, executeReadOnlyCommand };
+module.exports = { SUPPORTED_ACTIONS, assertAllowedPath, executeReadOnlyCommand, normalizeRoot, pathWithin, canonicalCandidate };

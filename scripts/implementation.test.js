@@ -32,7 +32,7 @@ test('Windows delivery has installer, portable and zip targets', () => {
 });
 
 test('main and preload share real bridge IPC channels', () => {
-  const channels = ['bridge:get-state','bridge:test','bridge:connect','bridge:disconnect','bridge:reconnect','bridge:update-preferences','bridge:unpair','bridge:open-logs','bridge:github-save','bridge:github-test','bridge:github-sync-now'];
+  const channels = ['bridge:get-state','bridge:test','bridge:connect','bridge:disconnect','bridge:reconnect','bridge:update-preferences','bridge:unpair','bridge:open-logs','bridge:github-save','bridge:github-test','bridge:github-sync-now','bridge:remote-inbox-save','bridge:remote-inbox-test','bridge:remote-inbox-check-now','bridge:remote-inbox-clear'];
   for (const channel of channels) {
     assert.ok(mainSource.includes(channel), `main.js missing ${channel}`);
     assert.ok(preloadSource.includes(channel), `preload.js missing ${channel}`);
@@ -108,4 +108,17 @@ test('read-only executor does not expose arbitrary command execution actions', (
 test('GitHub Remote Workspace has publish and guarded write-back runtime paths', () => {
   for (const marker of ['publishGithubWorkspaces','applyRemoteChanges','writePermission','Remote deletes are intentionally not applied']) assert.ok(githubSource.includes(marker), marker);
   assert.ok(mainSource.includes('policy.canExecute(\'write_files\')'));
+});
+
+
+test('remote command transport and executor are included in the validated runtime', () => {
+  const inbox=fs.readFileSync(path.join(root,'src/services/remote-command-inbox.js'),'utf8');
+  const remote=fs.readFileSync(path.join(root,'src/services/remote-executor.js'),'utf8');
+  assert.match(packageJson.scripts.validate,/remote-command-inbox\.js/);
+  assert.match(packageJson.scripts.validate,/remote-executor\.js/);
+  assert.match(inbox,/rejectUnauthorized:\s*true/);
+  assert.match(inbox,/one_time_challenge/);
+  assert.match(inbox,/replay_ledger/);
+  assert.match(remote,/Allowed Folder root itself is blocked/);
+  assert.match(remote,/unity_editor_job/);
 });

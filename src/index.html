@@ -16,7 +16,7 @@
         <div><strong>Nexa AI Local Bridge</strong><small>Secure Windows Companion</small></div>
       </div>
       <div class="header-right">
-        <span id="version" class="version">v1.4.0</span>
+        <span id="version" class="version">v1.6.0</span>
         <span id="statusPill" class="status-pill offline"><i></i><b id="statusText">UNPAIRED</b></span>
       </div>
     </header>
@@ -109,7 +109,7 @@
 
         <article class="card github-workspace-card">
           <div class="section-heading compact">
-            <div><span class="eyebrow">GITHUB REMOTE WORKSPACE</span><h2>ChatGPT Plus read + write bridge</h2><p>Publishes the authorized Unity mirror to a dedicated GitHub branch that this ChatGPT can inspect. Optional write-back safely applies remote text edits to Unity only when Hostinger Write Files is ON.</p></div>
+            <div><span class="eyebrow">GITHUB REMOTE WORKSPACE</span><h2>ChatGPT-readable mirror + local publish</h2><p>Publishes the authorized Unity mirror to a dedicated GitHub branch that this ChatGPT can inspect. GitHub remains the read/verification path; direct write commands use the secure Remote Command Inbox below.</p></div>
             <span id="githubBadge" class="chip blocked">Idle</span>
           </div>
           <div class="form-grid github-grid">
@@ -129,7 +129,7 @@
           </div>
           <div class="toggle-list workspace-toggles">
             <label class="toggle-row"><span><strong>Publish Unity workspace to GitHub</strong><small>After Hostinger sync, publish scripts, scenes, prefabs, shaders, materials, configs, logs, status, binary index and Unity captures to the workspace branch.</small></span><input id="githubSyncEnabled" type="checkbox"><i></i></label>
-            <label class="toggle-row"><span><strong>Apply ChatGPT edits back to Unity</strong><small>Requires Hostinger Write Files = ON. Only approved Unity text formats are written; local conflicts are protected and remote deletes are ignored.</small></span><input id="githubApplyEnabled" type="checkbox"><i></i></label>
+            <label class="toggle-row"><span><strong>Legacy GitHub write-back</strong><small>Compatibility option only. Leave OFF when using the Remote Command Inbox; direct command packages are safer and avoid GitHub connector write limitations.</small></span><input id="githubApplyEnabled" type="checkbox"><i></i></label>
           </div>
           <div class="button-row workspace-actions">
             <button id="githubSaveBtn" class="btn primary" type="button">Save & Verify GitHub</button>
@@ -140,9 +140,36 @@
           <div id="githubResults" class="workspace-results"></div>
         </article>
 
+        <article class="card remote-inbox-card">
+          <div class="section-heading compact">
+            <div><span class="eyebrow">CHATGPT REMOTE COMMAND INBOX</span><h2>Secure write channel to Unity + Windows</h2><p>Receives signed-by-context command packages through a dedicated POP3S mailbox. Every command is sender-checked, challenge-checked, time-limited, replay-protected, permission-gated, restricted to Allowed Folders, backed up before file changes, and can roll back automatically if Unity compilation fails.</p></div>
+            <span id="remoteInboxBadge" class="chip blocked">Idle</span>
+          </div>
+          <div class="form-grid github-grid">
+            <label class="field"><span>POP3 Host</span><input id="remoteInboxHost" type="text" spellcheck="false" value="pop.hostinger.com" placeholder="pop.hostinger.com"></label>
+            <label class="field"><span>POP3 SSL Port</span><input id="remoteInboxPort" type="number" min="1" max="65535" value="995"></label>
+            <label class="field full"><span>Dedicated Command Mailbox</span><input id="remoteInboxUsername" type="email" spellcheck="false" placeholder="nexa-command@yourdomain.com"><small>Use a dedicated mailbox, not your personal inbox. Hostinger Email uses pop.hostinger.com with SSL port 995.</small></label>
+            <label class="field full"><span>Mailbox Password</span><input id="remoteInboxPassword" type="password" autocomplete="off" placeholder="Stored securely — leave blank to reuse"><small id="remoteInboxPasswordHint">Encrypted on this PC with Electron safeStorage. Never published to GitHub or Hostinger workspace.</small></label>
+            <label class="field full"><span>Only accept commands from</span><input id="remoteInboxAllowedSender" type="email" spellcheck="false" placeholder="your-connected-gmail@example.com"><small>This must match the sender used by ChatGPT when it sends command emails.</small></label>
+            <label class="field"><span>Poll every (seconds)</span><input id="remoteInboxPollSeconds" type="number" min="10" max="300" value="15"></label>
+          </div>
+          <div class="toggle-list workspace-toggles">
+            <label class="toggle-row"><span><strong>Enable Remote Command Inbox</strong><small>When ON, Nexa checks the dedicated mailbox while connected to Hostinger. Emergency Stop always overrides this switch.</small></span><input id="remoteInboxEnabled" type="checkbox"><i></i></label>
+            <label class="toggle-row"><span><strong>Require sender authentication evidence</strong><small>Requires SPF, DKIM or DMARC pass evidence in received headers in addition to the exact sender allowlist.</small></span><input id="remoteInboxRequireAuth" type="checkbox" checked><i></i></label>
+          </div>
+          <div class="button-row workspace-actions">
+            <button id="remoteInboxSaveBtn" class="btn primary" type="button">Save & Verify Mailbox</button>
+            <button id="remoteInboxTestBtn" class="btn secondary" type="button">Test Mailbox</button>
+            <button id="remoteInboxCheckBtn" class="btn secondary" type="button">Check Now</button>
+            <button id="remoteInboxClearBtn" class="btn danger" type="button">Clear Mailbox Credentials</button>
+          </div>
+          <div id="remoteInboxMessage" class="current-command empty">Remote Command Inbox is not configured.</div>
+          <div id="remoteInboxResults" class="workspace-results"></div>
+        </article>
+
         <article class="card queue-card">
           <div class="section-heading compact">
-            <div><span class="eyebrow">REMOTE QUEUE · READ ONLY</span><h2>Current Hostinger command</h2><p>Status, drives, directories, text files, processes, GPU and CUDA diagnostics remain available alongside Unity workspace sync.</p></div>
+            <div><span class="eyebrow">REMOTE QUEUE · PERMISSION GATED</span><h2>Current Hostinger command</h2><p>Hostinger commands and secure inbox commands share the same permission gates. Supported jobs include file edits, safe batch changes, CMD, PowerShell, Python, Git, HTTPS downloads, Unity refresh/play controls and temporary Unity Editor jobs.</p></div>
             <span id="queueBadge" class="chip blocked">Idle</span>
           </div>
           <div id="currentCommand" class="current-command empty">No remote command is running.</div>
@@ -192,8 +219,8 @@
 
         <article class="card future-card">
           <span class="eyebrow">AI ACCESS</span>
-          <h2>Hostinger + GitHub Workspace</h2>
-          <p>v1.4.0 keeps the Hostinger mirror and adds a dedicated GitHub snapshot branch. This ChatGPT Plus can inspect the branch, and optional safe write-back can apply approved text edits to Unity.</p>
+          <h2>Hostinger + GitHub + Secure Command Inbox</h2>
+          <p>v1.6.0 keeps GitHub as the read/verification mirror and adds a separate secure command channel for direct work on authorized Unity projects and Allowed Folders. File mutations are transactional and Hostinger permissions remain the master safety switch.</p>
         </article>
       </aside>
     </section>

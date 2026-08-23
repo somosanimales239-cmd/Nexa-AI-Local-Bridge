@@ -16,6 +16,16 @@ for (const name of requiredScripts) {
     failures.push(`package.json is missing required script: ${name}`);
   }
 }
+const requiredRuntimeFiles = [
+  'preload.js',
+  'src/app.js',
+  'src/index.html',
+  'src/services/remote-command-inbox.js',
+  'src/services/remote-executor.js',
+  'src/services/unity-workspace.js',
+  'src/services/secure-config.js',
+];
+for (const file of requiredRuntimeFiles) if (!exists(file)) failures.push(`Required runtime file is missing: ${file}`);
 const main = packageJson.main || 'main.js';
 if (packageJson.build?.asar !== true) failures.push('package.json build.asar must be true for the Windows delivery.');
 const winTargets = (packageJson.build?.win?.target || []).map(item => typeof item === 'string' ? item : item?.target);

@@ -26,6 +26,7 @@ const els = {
   workspaceBadge: $('#workspaceBadge'), workspaceMessage: $('#workspaceMessage'), workspaceResults: $('#workspaceResults'),
   githubBadge: $('#githubBadge'), githubRepo: $('#githubRepo'), githubBranch: $('#githubBranch'), githubToken: $('#githubToken'), githubTokenHint: $('#githubTokenHint'),
   githubSyncEnabled: $('#githubSyncEnabled'), githubApplyEnabled: $('#githubApplyEnabled'), githubSaveBtn: $('#githubSaveBtn'), githubTestBtn: $('#githubTestBtn'), githubSyncBtn: $('#githubSyncBtn'), githubMessage: $('#githubMessage'), githubResults: $('#githubResults'),
+  remoteInboxBadge: $('#remoteInboxBadge'), remoteInboxHost: $('#remoteInboxHost'), remoteInboxPort: $('#remoteInboxPort'), remoteInboxUsername: $('#remoteInboxUsername'), remoteInboxPassword: $('#remoteInboxPassword'), remoteInboxPasswordHint: $('#remoteInboxPasswordHint'), remoteInboxAllowedSender: $('#remoteInboxAllowedSender'), remoteInboxPollSeconds: $('#remoteInboxPollSeconds'), remoteInboxEnabled: $('#remoteInboxEnabled'), remoteInboxRequireAuth: $('#remoteInboxRequireAuth'), remoteInboxSaveBtn: $('#remoteInboxSaveBtn'), remoteInboxTestBtn: $('#remoteInboxTestBtn'), remoteInboxCheckBtn: $('#remoteInboxCheckBtn'), remoteInboxClearBtn: $('#remoteInboxClearBtn'), remoteInboxMessage: $('#remoteInboxMessage'), remoteInboxResults: $('#remoteInboxResults'),
 };
 
 let latestState = null;
@@ -74,7 +75,7 @@ function statusClass(status) {
 function render(state) {
   if (!state) return;
   latestState = state;
-  els.version.textContent = `v${text(state.version || '1.4.0')}`;
+  els.version.textContent = `v${text(state.version || '1.6.0')}`;
   els.statusText.textContent = text((state.status || 'offline').replaceAll('-', ' ').toUpperCase());
   els.statusPill.className = `status-pill ${statusClass(state.status)}`;
   els.statusMessage.textContent = text(state.statusMessage || '');
@@ -103,6 +104,11 @@ function render(state) {
     els.unityRoots.value = Array.isArray(state.unityRoots) ? state.unityRoots.join('\n') : '';
     els.githubRepo.value = state.githubRepo || 'somosanimales239-cmd/Nexa-AI-Local-Bridge';
     els.githubBranch.value = state.githubBranch || 'nexa-unity-workspace';
+    els.remoteInboxHost.value = state.remoteInboxHost || 'pop.hostinger.com';
+    els.remoteInboxPort.value = state.remoteInboxPort || 995;
+    els.remoteInboxUsername.value = state.remoteInboxUsername || '';
+    els.remoteInboxAllowedSender.value = state.remoteInboxAllowedSender || '';
+    els.remoteInboxPollSeconds.value = state.remoteInboxPollSeconds || 15;
   }
 
   els.autoConnect.checked = state.autoConnect === true;
@@ -111,6 +117,12 @@ function render(state) {
   els.autoCaptureUnity.checked = state.autoCaptureUnity === true;
   els.githubSyncEnabled.checked = state.githubSyncEnabled === true;
   els.githubApplyEnabled.checked = state.githubApplyEnabled === true;
+  els.remoteInboxEnabled.checked = state.remoteInboxEnabled === true;
+  els.remoteInboxRequireAuth.checked = state.remoteInboxRequireAuth !== false;
+  els.remoteInboxPassword.placeholder = state.remoteInboxConfigured ? 'Stored securely — leave blank to reuse' : 'Dedicated mailbox password';
+  els.remoteInboxPasswordHint.textContent = state.remoteInboxConfigured
+    ? 'Mailbox password is encrypted with Electron safeStorage. Leave blank to reuse it.'
+    : 'Encrypted on this PC with Electron safeStorage. Never published to GitHub or Hostinger workspace.';
   els.githubToken.placeholder = state.githubConfigured ? 'Stored securely — leave blank to reuse' : 'github_pat_...';
   els.githubTokenHint.textContent = state.githubConfigured
     ? 'GitHub token is stored with Electron safeStorage. Leave blank to reuse it. It is never sent to Hostinger.'
@@ -157,6 +169,16 @@ function render(state) {
     return `<div class="workspace-result"><strong>${text(r.name)}</strong><span>${text(r.fileCount)} files · ${compileLabel} · ${serviceLabel}${repeated}</span><small>${plugin} · ${visuals}</small></div>`;
   }).join('');
 
+  const riStatus = state.remoteInboxStatus || 'idle';
+  els.remoteInboxBadge.textContent = riStatus === 'checking' ? 'Checking' : riStatus === 'executing' ? 'Executing' : riStatus === 'error' ? 'Error' : state.remoteInboxEnabled ? (state.remoteInboxConfigured ? 'Ready' : 'Setup') : 'Off';
+  els.remoteInboxBadge.className = `chip ${riStatus === 'error' ? 'danger' : riStatus === 'checking' || riStatus === 'executing' ? 'warning' : state.remoteInboxEnabled && state.remoteInboxConfigured ? 'allowed' : 'blocked'}`;
+  els.remoteInboxMessage.textContent = text(state.remoteInboxMessage || '');
+  const channel = state.remoteChannelId ? `Channel ${text(state.remoteChannelId).slice(0,24)}…` : 'Channel not initialized';
+  const lastCheck = state.remoteInboxLastCheck ? `Last check: ${formatTime(state.remoteInboxLastCheck)}` : 'Not checked yet';
+  const lastCommand = state.remoteInboxLastCommand ? `Last command: ${text(state.remoteInboxLastCommand)}` : 'No remote command processed yet';
+  const challenge = state.remoteChallengeExpiresAt ? `Challenge expires: ${formatTime(state.remoteChallengeExpiresAt)}` : 'Challenge not published yet';
+  els.remoteInboxResults.innerHTML = `<div class="workspace-result"><strong>${channel}</strong><span>${lastCheck}</span><small>${lastCommand} · ${challenge}</small></div>`;
+
   const ghStatus = state.githubStatus || 'idle';
   els.githubBadge.textContent = ghStatus === 'syncing' ? 'Publishing' : ghStatus === 'synced' ? 'Synced' : ghStatus === 'ready' ? 'Ready' : ghStatus === 'error' ? 'Error' : 'Idle';
   els.githubBadge.className = `chip ${ghStatus === 'synced' || ghStatus === 'ready' ? 'allowed' : ghStatus === 'syncing' ? 'warning' : ghStatus === 'error' ? 'danger' : 'blocked'}`;
@@ -200,6 +222,11 @@ els.allowedRoots.addEventListener('input', () => { formTouched = true; });
 els.unityRoots.addEventListener('input', () => { formTouched = true; });
 els.githubRepo.addEventListener('input', () => { formTouched = true; });
 els.githubBranch.addEventListener('input', () => { formTouched = true; });
+els.remoteInboxHost.addEventListener('input', () => { formTouched = true; });
+els.remoteInboxPort.addEventListener('input', () => { formTouched = true; });
+els.remoteInboxUsername.addEventListener('input', () => { formTouched = true; });
+els.remoteInboxAllowedSender.addEventListener('input', () => { formTouched = true; });
+els.remoteInboxPollSeconds.addEventListener('input', () => { formTouched = true; });
 
 els.testBtn.addEventListener('click', () => withBusy(els.testBtn, async () => {
   const result = await window.nexaBridge.testConnection(payload());
@@ -245,6 +272,7 @@ async function savePreferences() {
     autoCaptureUnity: els.autoCaptureUnity.checked,
     githubSyncEnabled: els.githubSyncEnabled.checked,
     githubApplyEnabled: els.githubApplyEnabled.checked,
+    remoteInboxEnabled: els.remoteInboxEnabled.checked,
   });
 }
 els.autoConnect.addEventListener('change', savePreferences);
@@ -253,6 +281,7 @@ els.workspaceSyncEnabled.addEventListener('change', savePreferences);
 els.autoCaptureUnity.addEventListener('change', savePreferences);
 els.githubSyncEnabled.addEventListener('change', savePreferences);
 els.githubApplyEnabled.addEventListener('change', savePreferences);
+els.remoteInboxEnabled.addEventListener('change', savePreferences);
 els.saveLocalBtn.addEventListener('click', async () => {
   await savePreferences();
   formTouched = false;
@@ -285,6 +314,48 @@ els.captureUnityBtn.addEventListener('click', () => withBusy(els.captureUnityBtn
   showTest(result.ok ? 'Capture request sent. Keep Unity open, then click Sync Now after a few seconds.' : `Capture request failed: ${result.error}`, !!result.ok);
 }));
 
+
+function remoteInboxPayload() {
+  return {
+    enabled: els.remoteInboxEnabled.checked,
+    host: els.remoteInboxHost.value.trim() || 'pop.hostinger.com',
+    port: Number(els.remoteInboxPort.value || 995),
+    username: els.remoteInboxUsername.value.trim(),
+    password: els.remoteInboxPassword.value,
+    allowedSender: els.remoteInboxAllowedSender.value.trim(),
+    pollSeconds: Number(els.remoteInboxPollSeconds.value || 15),
+    requireAuth: els.remoteInboxRequireAuth.checked,
+  };
+}
+
+els.remoteInboxTestBtn.addEventListener('click', () => withBusy(els.remoteInboxTestBtn, async () => {
+  const result = await window.nexaBridge.testRemoteInbox(remoteInboxPayload());
+  showTest(result.ok ? `Secure mailbox login succeeded.${result.message_count === null || result.message_count === undefined ? '' : ` ${result.message_count} message${result.message_count===1?'':'s'} currently in mailbox.`}` : `Mailbox test failed: ${result.error}`, !!result.ok);
+}));
+
+els.remoteInboxSaveBtn.addEventListener('click', () => withBusy(els.remoteInboxSaveBtn, async () => {
+  const result = await window.nexaBridge.saveRemoteInbox(remoteInboxPayload());
+  if (result.ok) {
+    els.remoteInboxPassword.value = '';
+    formTouched = false;
+    showTest('Remote Command Inbox verified and saved securely. Nexa can now receive permission-gated command packages.', true);
+  } else showTest(`Remote Command Inbox setup failed: ${result.error}`, false);
+}));
+
+els.remoteInboxCheckBtn.addEventListener('click', () => withBusy(els.remoteInboxCheckBtn, async () => {
+  const result = await window.nexaBridge.checkRemoteInboxNow();
+  showTest(result.ok ? `Command mailbox checked.${result.processed ? ` Processed ${result.processed} command${result.processed===1?'':'s'}.` : ' No new valid command was found.'}` : `Remote inbox check failed: ${result.error}`, !!result.ok);
+}));
+
+els.remoteInboxClearBtn.addEventListener('click', async () => {
+  if (!confirm('Remove the stored Remote Command Inbox password and disable the command channel on this PC?')) return;
+  const result = await window.nexaBridge.clearRemoteInbox();
+  if (result.ok) {
+    els.remoteInboxPassword.value = '';
+    formTouched = false;
+    showTest('Remote Command Inbox credentials were removed from this PC.', true);
+  }
+});
 
 function githubPayload() {
   return {

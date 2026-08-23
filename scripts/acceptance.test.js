@@ -58,7 +58,7 @@ test('remote command activity is visible in the interface', () => {
 
 test('GitHub Remote Workspace user flow is visible and wired', () => {
   assert.match(html, /GitHub Remote Workspace/i);
-  assert.match(html, /Apply ChatGPT edits back to Unity/i);
+  assert.match(html, /Legacy GitHub write-back/i);
   assert.match(renderer, /saveGithubWorkspace/);
   assert.match(renderer, /syncGithubWorkspaceNow/);
   assert.match(main, /bridge:github-sync-now/);
@@ -77,3 +77,24 @@ test('Unity workspace UI separates real compile errors from Unity service issues
   assert.match(renderer, /Unity integration update required/);
 });
 
+
+
+test('secure Remote Command Inbox user flow is visible and fully wired', () => {
+  assert.match(html, /CHATGPT REMOTE COMMAND INBOX/i);
+  assert.match(html, /Dedicated Command Mailbox/i);
+  assert.match(html, /sender authentication evidence/i);
+  assert.match(renderer, /saveRemoteInbox/);
+  assert.match(renderer, /checkRemoteInboxNow/);
+  assert.match(main, /bridge:remote-inbox-save/);
+  assert.match(main, /executeRemoteEnvelope/);
+  assert.match(secureConfig, /remoteInboxPasswordEncrypted/);
+});
+
+test('remote command engine advertises transactional rollback and Unity Editor jobs', () => {
+  const remoteExecutor=fs.readFileSync(path.join(root,'src/services/remote-executor.js'),'utf8');
+  assert.match(remoteExecutor,/BackupTransaction/);
+  assert.match(remoteExecutor,/rollback_on_compile_error/);
+  assert.match(remoteExecutor,/unity_editor_job/);
+  assert.match(remoteExecutor,/run_powershell/);
+  assert.match(remoteExecutor,/download_file/);
+});

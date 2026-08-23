@@ -14,7 +14,8 @@ const {
   submitCommandResult, submitCommandError, submitCommandCancelled,
   sendHeartbeat, sendServerLog
 } = require('./src/services/bridge-client');
-const { executeReadOnlyCommand } = require('./src/services/read-only-executor');
+const { executeSingleRemoteCommand, executeRemoteEnvelope } = require('./src/services/remote-executor');
+const { RemoteCommandInbox, testPop3Mailbox } = require('./src/services/remote-command-inbox');
 const { deriveWorkspaceEndpoint } = require('./src/services/workspace-client');
 const { syncUnityProject, installUnityIntegration, requestUnityCapture } = require('./src/services/unity-workspace');
 const { validateRepo, validateBranch, testGithubConnection, publishGithubWorkspaces } = require('./src/services/github-workspace');
@@ -31,6 +32,9 @@ let logger = null;
 let heartbeatTimer = null;
 let commandTimer = null;
 let workspaceTimer = null;
+let remoteInboxTimer = null;
+let remoteInbox = null;
+let remoteInboxBusy = false;
 let workspaceBusy = false;
 let commandBusy = false;
 let retryIndex = 0;
@@ -74,6 +78,20 @@ const state = {
   githubLastSync: '',
   githubLastCommit: '',
   githubPullResults: [],
+  remoteInboxEnabled: false,
+  remoteInboxConfigured: false,
+  remoteInboxHost: 'pop.hostinger.com',
+  remoteInboxPort: 995,
+  remoteInboxUsername: '',
+  remoteInboxAllowedSender: '',
+  remoteInboxPollSeconds: 15,
+  remoteInboxRequireAuth: true,
+  remoteInboxStatus: 'idle',
+  remoteInboxMessage: 'Remote Command Inbox is not configured.',
+  remoteInboxLastCheck: '',
+  remoteInboxLastCommand: '',
+  remoteChannelId: '',
+  remoteChallengeExpiresAt: '',
   commandEndpoint: '',
   currentCommand: null,
   policy: policy.snapshot(),
@@ -116,6 +134,25 @@ function updateConfigState() {
   state.githubBranch = cfg.githubBranch || 'nexa-unity-workspace';
   state.githubSyncEnabled = cfg.githubSyncEnabled === true;
   state.githubApplyEnabled = cfg.githubApplyEnabled === true;
+  state.remoteInboxEnabled = cfg.remoteInboxEnabled === true;
+  state.remoteInboxConfigured = cfg.remoteInboxConfigured === true;
+  state.remoteInboxHost = cfg.remoteInboxHost || 'pop.hostinger.com';
+  state.remoteInboxPort = cfg.remoteInboxPort || 995;
+  state.remoteInboxUsername = cfg.remoteInboxUsername || '';
+  state.remoteInboxAllowedSender = cfg.remoteInboxAllowedSender || '';
+  state.remoteInboxPollSeconds = cfg.remoteInboxPollSeconds || 15;
+  state.remoteInboxRequireAuth = cfg.remoteInboxRequireAuth !== false;
+  if (remoteInbox) {
+    const rs = remoteInbox.getPublicStatus({ enabled:state.remoteInboxEnabled, configured:state.remoteInboxConfigured, pollSeconds:state.remoteInboxPollSeconds, policy:policy.snapshot() });
+    state.remoteInboxStatus = rs.state || 'idle';
+    state.remoteInboxLastCheck = rs.last_check_at || '';
+    state.remoteInboxLastCommand = rs.last_command_id || '';
+    state.remoteChannelId = rs.channel_id || '';
+    state.remoteChallengeExpiresAt = rs.challenge_expires_at || '';
+    state.remoteInboxMessage = state.remoteInboxEnabled
+      ? (state.remoteInboxConfigured ? 'Secure email command channel is enabled.' : 'Remote Command Inbox is enabled but mailbox credentials are incomplete.')
+      : 'Remote Command Inbox is disabled.';
+  }
   if (!cfg.paired && !state.connected) state.status = 'unpaired';
 }
 
@@ -154,6 +191,87 @@ function stopCommandTimer() {
 function stopWorkspaceTimer() {
   if (workspaceTimer) clearTimeout(workspaceTimer);
   workspaceTimer = null;
+}
+
+function stopRemoteInboxTimer() {
+  if (remoteInboxTimer) clearTimeout(remoteInboxTimer);
+  remoteInboxTimer = null;
+}
+
+function remoteExecutionContext() {
+  const cfg = configStore.publicConfig();
+  return {
+    policy,
+    systemInfo,
+    allowedRoots: cfg.allowedRoots || [],
+    unityRoots: cfg.unityRoots || [],
+    userDataPath: app.getPath('userData'),
+  };
+}
+
+function refreshRemoteInboxState(message) {
+  if (!remoteInbox || !configStore) return;
+  const cfg = configStore.publicConfig();
+  const rs = remoteInbox.getPublicStatus({ enabled:cfg.remoteInboxEnabled, configured:cfg.remoteInboxConfigured, pollSeconds:cfg.remoteInboxPollSeconds, policy:policy.snapshot() });
+  state.remoteInboxStatus = rs.state || 'idle';
+  state.remoteInboxLastCheck = rs.last_check_at || '';
+  state.remoteInboxLastCommand = rs.last_command_id || '';
+  state.remoteChannelId = rs.channel_id || '';
+  state.remoteChallengeExpiresAt = rs.challenge_expires_at || '';
+  state.remoteInboxMessage = message || (cfg.remoteInboxEnabled ? (cfg.remoteInboxConfigured ? 'Secure email command channel is enabled.' : 'Remote Command Inbox credentials are incomplete.') : 'Remote Command Inbox is disabled.');
+  try { remoteInbox.writeProjectStatus(cfg.unityRoots || [], rs); } catch {}
+  broadcastState();
+}
+
+function scheduleRemoteInbox(delayMs) {
+  stopRemoteInboxTimer();
+  const cfg = configStore?.publicConfig?.() || {};
+  if (!state.paired || !state.connected || cfg.remoteInboxEnabled !== true || cfg.remoteInboxConfigured !== true) return;
+  const delay = delayMs === undefined ? Math.max(10,Math.min(Number(cfg.remoteInboxPollSeconds || 15),300))*1000 : delayMs;
+  remoteInboxTimer = setTimeout(() => {
+    remoteInboxCycle(false).catch(error => {
+      state.remoteInboxStatus='error';
+      state.remoteInboxMessage=error.message;
+      safeActivity('warning','remote-inbox',`Remote Command Inbox: ${error.message}`);
+      scheduleRemoteInbox(Math.max(15000,delay));
+    });
+  }, delay);
+}
+
+async function remoteInboxCycle(manual=false) {
+  stopRemoteInboxTimer();
+  if (remoteInboxBusy) return {ok:false,error:'Remote Command Inbox is already checking.'};
+  const cfg=configStore.publicConfig();
+  if (!cfg.remoteInboxEnabled && !manual) return {ok:true,processed:0,reason:'disabled'};
+  if (!cfg.remoteInboxConfigured) throw new Error('Configure the dedicated command mailbox first.');
+  remoteInboxBusy=true;
+  state.remoteInboxStatus='checking';
+  state.remoteInboxMessage='Checking the secure command mailbox…';
+  broadcastState();
+  try {
+    const result=await remoteInbox.poll({
+      config:{...cfg,remoteInboxEnabled:true},
+      password:configStore.getRemoteInboxPassword(),
+      policy:policy.snapshot(),
+      unityRoots:cfg.unityRoots || [],
+      executeEnvelope:async envelope=>{
+        state.currentCommand={uuid:envelope.command_id,action:envelope.actions.map(a=>a.action).join(' + '),status:'running'};
+        broadcastState();
+        safeActivity('info','remote-command',`Executing ${envelope.actions.length} remote action${envelope.actions.length===1?'':'s'} (${envelope.command_id}).`);
+        const execution=await executeRemoteEnvelope(envelope,remoteExecutionContext());
+        state.currentCommand=null;
+        safeActivity(execution.ok===false?'warning':'info','remote-command',execution.ok===false?`Remote command failed/rolled back: ${envelope.command_id}.`:`Remote command completed: ${envelope.command_id}.`);
+        setTimeout(()=>workspaceSyncCycle(true).catch(error=>safeActivity('warning','remote-command-sync',error.message)),1200);
+        return execution;
+      },
+    });
+    refreshRemoteInboxState(result.processed?`Processed ${result.processed} remote command${result.processed===1?'':'s'}; result publication queued.`:'Command mailbox checked; no new valid commands.');
+    return result;
+  } finally {
+    remoteInboxBusy=false;
+    state.currentCommand=null;
+    if(configStore.publicConfig().remoteInboxEnabled) scheduleRemoteInbox();
+  }
 }
 
 function scheduleWorkspaceSync(delayMs = WORKSPACE_SYNC_MS) {
@@ -341,6 +459,7 @@ async function heartbeatOnce({ endpoint, token }) {
   broadcastState();
   if (!commandTimer && !commandBusy) scheduleCommandPoll(1000);
   if (state.workspaceSyncEnabled && !workspaceTimer && !workspaceBusy) scheduleWorkspaceSync(2500);
+  if (configStore.publicConfig().remoteInboxEnabled && !remoteInboxTimer && !remoteInboxBusy) scheduleRemoteInbox(1800);
   return response;
 }
 
@@ -420,7 +539,7 @@ async function connectInternal(payload, savePairing) {
 async function commandCycle() {
   stopCommandTimer();
   if (commandBusy || !state.paired || !state.connected) return;
-  if (!policy.canExecute('read_files')) {
+  if (!policy.authenticated || !policy.bridgeEnabled || policy.emergencyStop) {
     scheduleCommandPoll(COMMAND_POLL_MS);
     return;
   }
@@ -447,17 +566,16 @@ async function commandCycle() {
     }
 
     try {
-      const result = await executeReadOnlyCommand(command, {
-        policy,
-        systemInfo,
-        allowedRoots: configStore.publicConfig().allowedRoots,
-      });
+      const result = await executeSingleRemoteCommand(command, remoteExecutionContext());
       if (result && result.cancelled) {
         await submitCommandCancelled(endpoint, token, command.uuid);
+      } else if (result && result.ok === false) {
+        await submitCommandError(endpoint, token, command.uuid, result.error || 'Remote command failed.');
       } else {
         await submitCommandResult(endpoint, token, command.uuid, result);
       }
-      safeActivity('info', 'command', `Command completed: ${command.action} (${command.uuid}).`);
+      safeActivity(result?.ok===false?'warning':'info', 'command', `${result?.ok===false?'Command failed':'Command completed'}: ${command.action} (${command.uuid}).`);
+      if (result?.changed_files?.length) setTimeout(()=>workspaceSyncCycle(true).catch(()=>{}),1200);
     } catch (error) {
       await submitCommandError(endpoint, token, command.uuid, error.message);
       safeActivity('warning', 'command', `Command failed: ${command.action}: ${error.message}`);
@@ -474,6 +592,7 @@ function disconnectInternal() {
   stopTimer();
   stopCommandTimer();
   stopWorkspaceTimer();
+  stopRemoteInboxTimer();
   policy.markDisconnected();
   state.policy = policy.snapshot();
   state.connected = false;
@@ -560,7 +679,7 @@ function refreshTray() {
     }},
     { label: 'Disconnect', enabled: state.connected, click: () => disconnectInternal() },
     { type: 'separator' },
-    { label: 'Quit', click: () => { quitting = true; stopTimer(); stopCommandTimer(); stopWorkspaceTimer(); app.quit(); } },
+    { label: 'Quit', click: () => { quitting = true; stopTimer(); stopCommandTimer(); stopWorkspaceTimer(); stopRemoteInboxTimer(); app.quit(); } },
   ]));
 }
 
@@ -624,11 +743,76 @@ ipcMain.handle('bridge:update-preferences', (_event, payload) => {
     autoCaptureUnity: payload?.autoCaptureUnity,
     githubSyncEnabled: payload?.githubSyncEnabled,
     githubApplyEnabled: payload?.githubApplyEnabled,
+    remoteInboxEnabled: payload?.remoteInboxEnabled,
   });
   updateConfigState();
   applyLoginPreference(next.startWithWindows);
   safeActivity('info', 'preferences', 'Local preferences updated.');
+  if (next.remoteInboxEnabled && next.remoteInboxConfigured && state.connected) scheduleRemoteInbox(500); else stopRemoteInboxTimer();
+  refreshRemoteInboxState();
   return { ok: true, state: publicState() };
+});
+
+ipcMain.handle('bridge:remote-inbox-save', async (_event, payload) => {
+  try {
+    const current=configStore.publicConfig();
+    const password=typeof payload?.password==='string' && payload.password ? payload.password : configStore.getRemoteInboxPassword();
+    if(!password) throw new Error('Enter the dedicated command mailbox password.');
+    const candidate={
+      host:String(payload?.host || current.remoteInboxHost || 'pop.hostinger.com').trim(),
+      port:Number(payload?.port || current.remoteInboxPort || 995),
+      username:String(payload?.username || current.remoteInboxUsername || '').trim(),
+      password,
+    };
+    const test=await testPop3Mailbox(candidate);
+    const next=configStore.saveRemoteInbox({
+      enabled:payload?.enabled===true,
+      host:candidate.host,
+      port:candidate.port,
+      username:candidate.username,
+      password:typeof payload?.password==='string'?payload.password:'',
+      allowedSender:String(payload?.allowedSender || current.remoteInboxAllowedSender || '').trim(),
+      pollSeconds:Number(payload?.pollSeconds || current.remoteInboxPollSeconds || 15),
+      requireAuth:payload?.requireAuth!==false,
+    });
+    updateConfigState();
+    refreshRemoteInboxState(`Command mailbox verified (${test.message_count ?? 'unknown'} messages) and saved securely.`);
+    if(next.remoteInboxEnabled && state.connected) scheduleRemoteInbox(500);
+    safeActivity('info','remote-inbox','Secure Remote Command Inbox verified and saved.');
+    return {ok:true,test,state:publicState()};
+  } catch(error){
+    state.remoteInboxStatus='error'; state.remoteInboxMessage=error.message; broadcastState();
+    safeActivity('warning','remote-inbox',`Remote Command Inbox setup failed: ${error.message}`);
+    return {ok:false,error:error.message};
+  }
+});
+
+ipcMain.handle('bridge:remote-inbox-test', async (_event,payload)=>{
+  try{
+    const current=configStore.publicConfig();
+    const password=typeof payload?.password==='string' && payload.password ? payload.password : configStore.getRemoteInboxPassword();
+    const result=await testPop3Mailbox({
+      host:String(payload?.host || current.remoteInboxHost || 'pop.hostinger.com').trim(),
+      port:Number(payload?.port || current.remoteInboxPort || 995),
+      username:String(payload?.username || current.remoteInboxUsername || '').trim(),
+      password,
+    });
+    safeActivity('info','remote-inbox','Remote Command Inbox POP3S test passed.');
+    return {ok:true,...result};
+  }catch(error){safeActivity('warning','remote-inbox',error.message);return{ok:false,error:error.message};}
+});
+
+ipcMain.handle('bridge:remote-inbox-check-now', async()=>{
+  try{return await remoteInboxCycle(true);}catch(error){state.remoteInboxStatus='error';state.remoteInboxMessage=error.message;broadcastState();return{ok:false,error:error.message};}
+});
+
+ipcMain.handle('bridge:remote-inbox-clear', ()=>{
+  stopRemoteInboxTimer();
+  configStore.clearRemoteInbox();
+  updateConfigState();
+  refreshRemoteInboxState('Remote Command Inbox credentials removed from this PC.');
+  safeActivity('warning','remote-inbox','Remote Command Inbox credentials were cleared.');
+  return {ok:true,state:publicState()};
 });
 
 ipcMain.handle('bridge:github-save', async (_event, payload) => {
@@ -744,6 +928,14 @@ ipcMain.handle('bridge:unpair', () => {
   state.githubLastSync = '';
   state.githubLastCommit = '';
   state.githubPullResults = [];
+  state.remoteInboxEnabled = false;
+  state.remoteInboxConfigured = false;
+  state.remoteInboxStatus = 'idle';
+  state.remoteInboxMessage = 'Remote Command Inbox is not configured.';
+  state.remoteInboxLastCheck = '';
+  state.remoteInboxLastCommand = '';
+  state.remoteChannelId = '';
+  state.remoteChallengeExpiresAt = '';
   state.commandEndpoint = '';
   state.currentCommand = null;
   state.status = 'unpaired';
@@ -761,7 +953,9 @@ ipcMain.handle('bridge:open-logs', () => {
 app.whenReady().then(async () => {
   logger = new SafeLogger(path.join(app.getPath('userData'), 'logs'));
   configStore = new SecureConfig({ userDataPath: app.getPath('userData'), safeStorage });
+  remoteInbox = new RemoteCommandInbox({ userDataPath: app.getPath('userData'), logger });
   updateConfigState();
+  refreshRemoteInboxState();
 
   state.version = app.getVersion();
   systemInfo = await collectSystemInfo(app.getVersion());
@@ -790,6 +984,7 @@ app.on('before-quit', () => {
   stopTimer();
   stopCommandTimer();
   stopWorkspaceTimer();
+  stopRemoteInboxTimer();
 });
 
 app.on('window-all-closed', () => {
