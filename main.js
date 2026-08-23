@@ -15,7 +15,7 @@ const {
   sendHeartbeat, sendServerLog
 } = require('./src/services/bridge-client');
 const { executeSingleRemoteCommand, executeRemoteEnvelope } = require('./src/services/remote-executor');
-const { RemoteCommandInbox, testPop3Mailbox } = require('./src/services/remote-command-inbox');
+const { RemoteCommandInbox, testPop3Mailbox, testSmtpMailbox } = require('./src/services/remote-command-inbox');
 const { deriveWorkspaceEndpoint } = require('./src/services/workspace-client');
 const { syncUnityProject, installUnityIntegration, requestUnityCapture } = require('./src/services/unity-workspace');
 const { validateRepo, validateBranch, testGithubConnection, publishGithubWorkspaces } = require('./src/services/github-workspace');
@@ -86,6 +86,10 @@ const state = {
   remoteInboxAllowedSender: '',
   remoteInboxPollSeconds: 15,
   remoteInboxRequireAuth: true,
+  remoteInboxSmtpHost: 'smtp.hostinger.com',
+  remoteInboxSmtpPort: 465,
+  remoteInboxSendResults: true,
+  remoteInboxResultRecipient: '',
   remoteInboxStatus: 'idle',
   remoteInboxMessage: 'Remote Command Inbox is not configured.',
   remoteInboxLastCheck: '',
@@ -142,6 +146,10 @@ function updateConfigState() {
   state.remoteInboxAllowedSender = cfg.remoteInboxAllowedSender || '';
   state.remoteInboxPollSeconds = cfg.remoteInboxPollSeconds || 15;
   state.remoteInboxRequireAuth = cfg.remoteInboxRequireAuth !== false;
+  state.remoteInboxSmtpHost = cfg.remoteInboxSmtpHost || 'smtp.hostinger.com';
+  state.remoteInboxSmtpPort = cfg.remoteInboxSmtpPort || 465;
+  state.remoteInboxSendResults = cfg.remoteInboxSendResults !== false;
+  state.remoteInboxResultRecipient = cfg.remoteInboxResultRecipient || cfg.remoteInboxAllowedSender || '';
   if (remoteInbox) {
     const rs = remoteInbox.getPublicStatus({ enabled:state.remoteInboxEnabled, configured:state.remoteInboxConfigured, pollSeconds:state.remoteInboxPollSeconds, policy:policy.snapshot() });
     state.remoteInboxStatus = rs.state || 'idle';
@@ -254,11 +262,11 @@ async function remoteInboxCycle(manual=false) {
       password:configStore.getRemoteInboxPassword(),
       policy:policy.snapshot(),
       unityRoots:cfg.unityRoots || [],
-      executeEnvelope:async envelope=>{
+      executeEnvelope:async (envelope,transport)=>{
         state.currentCommand={uuid:envelope.command_id,action:envelope.actions.map(a=>a.action).join(' + '),status:'running'};
         broadcastState();
         safeActivity('info','remote-command',`Executing ${envelope.actions.length} remote action${envelope.actions.length===1?'':'s'} (${envelope.command_id}).`);
-        const execution=await executeRemoteEnvelope(envelope,remoteExecutionContext());
+        const execution=await executeRemoteEnvelope(envelope,{...remoteExecutionContext(),attachments:Array.isArray(transport?.attachments)?transport.attachments:[]});
         state.currentCommand=null;
         safeActivity(execution.ok===false?'warning':'info','remote-command',execution.ok===false?`Remote command failed/rolled back: ${envelope.command_id}.`:`Remote command completed: ${envelope.command_id}.`);
         setTimeout(()=>workspaceSyncCycle(true).catch(error=>safeActivity('warning','remote-command-sync',error.message)),1200);
@@ -763,8 +771,14 @@ ipcMain.handle('bridge:remote-inbox-save', async (_event, payload) => {
       port:Number(payload?.port || current.remoteInboxPort || 995),
       username:String(payload?.username || current.remoteInboxUsername || '').trim(),
       password,
+      smtpHost:String(payload?.smtpHost || current.remoteInboxSmtpHost || 'smtp.hostinger.com').trim(),
+      smtpPort:Number(payload?.smtpPort || current.remoteInboxSmtpPort || 465),
+      sendResults:payload?.sendResults!==false,
+      resultRecipient:String(payload?.resultRecipient || current.remoteInboxResultRecipient || payload?.allowedSender || current.remoteInboxAllowedSender || '').trim(),
     };
-    const test=await testPop3Mailbox(candidate);
+    const pop3Test=await testPop3Mailbox(candidate);
+    const smtpTest=candidate.sendResults ? await testSmtpMailbox({host:candidate.smtpHost,port:candidate.smtpPort,username:candidate.username,password}) : {ok:true,skipped:true};
+    const test={...pop3Test,smtp_ok:smtpTest.ok===true,smtp_skipped:smtpTest.skipped===true};
     const next=configStore.saveRemoteInbox({
       enabled:payload?.enabled===true,
       host:candidate.host,
@@ -774,9 +788,13 @@ ipcMain.handle('bridge:remote-inbox-save', async (_event, payload) => {
       allowedSender:String(payload?.allowedSender || current.remoteInboxAllowedSender || '').trim(),
       pollSeconds:Number(payload?.pollSeconds || current.remoteInboxPollSeconds || 15),
       requireAuth:payload?.requireAuth!==false,
+      smtpHost:candidate.smtpHost,
+      smtpPort:candidate.smtpPort,
+      sendResults:candidate.sendResults,
+      resultRecipient:candidate.resultRecipient,
     });
     updateConfigState();
-    refreshRemoteInboxState(`Command mailbox verified (${test.message_count ?? 'unknown'} messages) and saved securely.`);
+    refreshRemoteInboxState(`Command mailbox verified (${test.message_count ?? 'unknown'} messages)${candidate.sendResults ? ' · SMTP result channel verified' : ''} and saved securely.`);
     if(next.remoteInboxEnabled && state.connected) scheduleRemoteInbox(500);
     safeActivity('info','remote-inbox','Secure Remote Command Inbox verified and saved.');
     return {ok:true,test,state:publicState()};
@@ -791,14 +809,16 @@ ipcMain.handle('bridge:remote-inbox-test', async (_event,payload)=>{
   try{
     const current=configStore.publicConfig();
     const password=typeof payload?.password==='string' && payload.password ? payload.password : configStore.getRemoteInboxPassword();
-    const result=await testPop3Mailbox({
-      host:String(payload?.host || current.remoteInboxHost || 'pop.hostinger.com').trim(),
-      port:Number(payload?.port || current.remoteInboxPort || 995),
-      username:String(payload?.username || current.remoteInboxUsername || '').trim(),
-      password,
-    });
-    safeActivity('info','remote-inbox','Remote Command Inbox POP3S test passed.');
-    return {ok:true,...result};
+    const host=String(payload?.host || current.remoteInboxHost || 'pop.hostinger.com').trim();
+    const port=Number(payload?.port || current.remoteInboxPort || 995);
+    const username=String(payload?.username || current.remoteInboxUsername || '').trim();
+    const smtpHost=String(payload?.smtpHost || current.remoteInboxSmtpHost || 'smtp.hostinger.com').trim();
+    const smtpPort=Number(payload?.smtpPort || current.remoteInboxSmtpPort || 465);
+    const sendResults=payload?.sendResults===undefined ? current.remoteInboxSendResults!==false : payload.sendResults!==false;
+    const pop3=await testPop3Mailbox({host,port,username,password});
+    const smtp=sendResults ? await testSmtpMailbox({host:smtpHost,port:smtpPort,username,password}) : {ok:true,skipped:true};
+    safeActivity('info','remote-inbox','Remote Command Inbox transport test passed.');
+    return {ok:true,...pop3,smtp_ok:smtp.ok===true,smtp_skipped:smtp.skipped===true};
   }catch(error){safeActivity('warning','remote-inbox',error.message);return{ok:false,error:error.message};}
 });
 

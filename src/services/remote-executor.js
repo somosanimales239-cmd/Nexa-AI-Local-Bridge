@@ -19,9 +19,10 @@ const MAX_BACKUP_BYTES = 256 * 1024 * 1024;
 const ACTION_CAPABILITIES = Object.freeze({
   computer_status: 'read_files', list_drives: 'read_files', list_directory: 'read_files', read_file: 'read_files',
   get_processes: 'read_files', get_gpu_status: 'read_files', get_cuda_status: 'read_files',
-  write_text_file: 'write_files', write_base64_file: 'write_files', create_directory: 'write_files', delete_path: 'write_files',
+  write_text_file: 'write_files', write_base64_file: 'write_files', write_attachment_file: 'write_files', create_directory: 'write_files', delete_path: 'write_files',
   copy_path: 'write_files', move_path: 'write_files',
   run_cmd: 'cmd', run_powershell: 'powershell', run_python: 'python', run_git: 'git', run_process: 'cmd',
+  run_blender: 'blender', start_local_process: 'local_servers', stop_process: 'local_servers',
   download_file: 'browser',
   unity_refresh: 'write_files', unity_capture: 'screenshots', unity_play: 'write_files', unity_stop: 'write_files',
   unity_pause: 'write_files', unity_unpause: 'write_files', unity_open_scene: 'write_files', unity_save_scene: 'write_files',
@@ -49,6 +50,8 @@ function ensureCapability(action, context) {
   if (!required) throw new Error(`Unsupported remote action: ${action}.`);
   if (!context?.policy?.canExecute(required)) throw new Error(`${action} requires Hostinger permission: ${required}.`);
   if (action === 'download_file' && !context.policy.canExecute('write_files')) throw new Error('download_file also requires Write Files permission.');
+  const fullComputerActions=new Set(['run_cmd','run_powershell','run_python','run_git','run_process','run_blender','start_local_process','stop_process','unity_editor_job']);
+  if (fullComputerActions.has(action) && context.policy.fullComputerMode !== true) throw new Error(`${action} requires Full Computer Mode in Hostinger in addition to ${required}.`);
   return required;
 }
 
@@ -197,6 +200,23 @@ async function writeBase64File(args, context, tx) {
   return { path:target, bytes:buffer.length, sha256:sha256Buffer(buffer) };
 }
 
+
+async function writeAttachmentFile(args, context, tx) {
+  const name=String(args.attachment_name||args.name||'').trim();
+  if(!name) throw new Error('write_attachment_file requires args.attachment_name.');
+  const attachments=Array.isArray(context.attachments)?context.attachments:[];
+  const attachment=attachments.find(row=>String(row.filename||'').toLowerCase()===name.toLowerCase());
+  if(!attachment || !Buffer.isBuffer(attachment.buffer)) throw new Error(`Email attachment was not found: ${name}`);
+  const target=assertAllowedPath(args.path,context.allowedRoots);
+  if(args.sha256 && sha256Buffer(attachment.buffer)!==String(args.sha256).toLowerCase()) throw new Error(`Attachment SHA-256 mismatch for ${name}.`);
+  await tx.backup(target);
+  await fs.promises.mkdir(path.dirname(target),{recursive:true});
+  const tmp=`${target}.nexa-attachment-${process.pid}-${Date.now()}`;
+  await fs.promises.writeFile(tmp,attachment.buffer);
+  await fs.promises.rename(tmp,target).catch(async()=>{await fs.promises.copyFile(tmp,target);await fs.promises.rm(tmp,{force:true});});
+  return {path:target,attachment_name:name,bytes:attachment.buffer.length,sha256:sha256File(target),content_type:attachment.content_type||'application/octet-stream'};
+}
+
 async function createDirectory(args, context, tx) {
   const target = assertAllowedPath(args.path, context.allowedRoots);
   await tx.backup(target);
@@ -253,7 +273,7 @@ async function downloadFile(args, context, tx) {
   const result = await new Promise((resolve, reject) => {
     const file = fs.createWriteStream(tmp, { flags:'w' });
     let bytes = 0;
-    const request = https.get(url, { headers:{'User-Agent':'Nexa-AI-Local-Bridge/1.6.0'} }, response => {
+    const request = https.get(url, { headers:{'User-Agent':'Nexa-AI-Local-Bridge/1.6.2'} }, response => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         file.close(); fs.rmSync(tmp,{force:true}); reject(new Error('download_file redirects are blocked; provide the final HTTPS URL.')); return;
       }
@@ -271,6 +291,19 @@ async function downloadFile(args, context, tx) {
   if (args.sha256 && sha256File(tmp) !== String(args.sha256).toLowerCase()) { await fs.promises.rm(tmp,{force:true}); throw new Error('Downloaded file SHA-256 mismatch.'); }
   await fs.promises.rename(tmp,target).catch(async()=>{await fs.promises.copyFile(tmp,target);await fs.promises.rm(tmp,{force:true});});
   return { path:target, bytes:result.bytes, sha256:sha256File(target), source_host:url.host };
+}
+
+
+function startDetachedProcess(executable,args,options={}){
+  const child=spawn(executable,Array.isArray(args)?args.map(String):[],{cwd:options.cwd,windowsHide:true,shell:false,detached:true,stdio:'ignore',env:{...process.env}});
+  child.unref();
+  return {executable,pid:child.pid,started:true};
+}
+
+async function stopProcess(pid){
+  const numeric=Number(pid); if(!Number.isInteger(numeric)||numeric<=0)throw new Error('stop_process requires a positive integer args.pid.');
+  if(process.platform==='win32') return runExecutable('taskkill.exe',['/PID',String(numeric),'/T','/F'],{timeout_ms:30000});
+  try{process.kill(numeric,'SIGTERM');return{pid:numeric,stopped:true};}catch(error){throw new Error(`Could not stop process ${numeric}: ${error.message}`);}
 }
 
 function selectUnityRoot(args, context) {
@@ -308,6 +341,7 @@ async function unityEditorJob(args, context, tx, commandId) {
   const root = selectUnityRoot(args, context);
   if (!String(args.code || '').trim()) throw new Error('unity_editor_job requires args.code containing the C# statements to run.');
   const affected = Array.isArray(args.backup_paths) ? args.backup_paths : [];
+  if (!affected.length && args.allow_unbacked !== true) throw new Error('unity_editor_job requires args.backup_paths so affected Unity assets can be restored automatically. Set allow_unbacked=true only for an intentionally non-transactional Editor job.');
   for (const rel of affected) await tx.backup(assertAllowedPath(path.isAbsolute(rel)?rel:path.join(root,rel), context.allowedRoots));
   const jobsDir = path.join(root,'Assets','Editor','NexaRemoteJobs');
   const className = `NexaRemoteJob_${safeId(commandId).replace(/\W/g,'_')}`;
@@ -343,6 +377,7 @@ async function executeAction(actionRow, context, tx, commandId) {
   switch(action){
     case 'write_text_file': return writeTextFile(args,context,tx);
     case 'write_base64_file': return writeBase64File(args,context,tx);
+    case 'write_attachment_file': return writeAttachmentFile(args,context,tx);
     case 'create_directory': return createDirectory(args,context,tx);
     case 'delete_path': return deletePath(args,context,tx);
     case 'copy_path': return copyPath(args,context,tx);
@@ -353,10 +388,12 @@ async function executeAction(actionRow, context, tx, commandId) {
     case 'run_python': return runExecutable(String(args.executable||'python.exe'),Array.isArray(args.args)?args.args:['-c',String(args.code||'')],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms});
     case 'run_git': return runExecutable('git.exe',Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms});
     case 'run_process': {
-      if (!context.policy.fullComputerMode) throw new Error('run_process requires Full Computer Mode in Hostinger.');
       const executable=String(args.executable||'').trim(); if(!executable) throw new Error('run_process requires args.executable.');
       return runExecutable(executable,Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms});
     }
+    case 'run_blender': { const executable=String(args.executable||'blender.exe').trim(); return runExecutable(executable,Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms}); }
+    case 'start_local_process': { const executable=String(args.executable||'').trim(); if(!executable)throw new Error('start_local_process requires args.executable.'); return startDetachedProcess(executable,Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots)}); }
+    case 'stop_process': return stopProcess(args.pid);
     case 'unity_refresh': { const root=selectUnityRoot(args,context); return requestUnityAction(root,context.allowedRoots,{action:'refresh_assets'}); }
     case 'unity_capture': { const root=selectUnityRoot(args,context); return requestUnityAction(root,context.allowedRoots,{action:'capture_views'}); }
     case 'unity_play': { const root=selectUnityRoot(args,context); return requestUnityAction(root,context.allowedRoots,{action:'play'}); }
@@ -390,7 +427,7 @@ async function executeRemoteEnvelope(envelope, context) {
       const row=envelope.actions[i];
       const result=await executeAction(row,context,tx,commandId);
       results.push({index:i,action:row.action,ok:true,result});
-      if(result?.path && ['write_text_file','write_base64_file','create_directory','delete_path','download_file'].includes(row.action)) changedFiles.push(result.path);
+      if(result?.path && ['write_text_file','write_base64_file','write_attachment_file','create_directory','delete_path','download_file'].includes(row.action)) changedFiles.push(result.path);
       if(result?.destination && ['copy_path','move_path'].includes(row.action)) changedFiles.push(result.destination);
     }
     if(envelope.options?.verify_unity_compile===true){

@@ -15,7 +15,7 @@ const {
   DIAGNOSTICS_SCHEMA_VERSION,
 } = require('./unity-diagnostics');
 
-const BRIDGE_PLUGIN_VERSION = '1.6.0';
+const BRIDGE_PLUGIN_VERSION = '1.6.2';
 const TEXT_EXT = new Set(['.cs','.unity','.prefab','.shader','.shadergraph','.mat','.json','.asmdef','.asmref','.xml','.yaml','.yml','.txt','.md','.cginc','.hlsl','.compute','.uss','.uxml','.inputactions','.controller','.anim','.meta','.asset','.rsp','.props','.csproj','.sln','.gitignore']);
 const EXCLUDED_DIRS = new Set(['library','temp','obj','.git','.vs','memorycaptures','.nexa-bridge']);
 const MAX_FILES = 30000;
@@ -453,7 +453,7 @@ using System.Collections.Generic;
 
 [InitializeOnLoad]
 public static class NexaUnityBridge {
-    public const string NEXA_BRIDGE_PLUGIN_VERSION = "1.6.0";
+    public const string NEXA_BRIDGE_PLUGIN_VERSION = "1.6.2";
 
     [Serializable]
     class BridgeRequest {

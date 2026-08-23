@@ -82,7 +82,7 @@ test('Unity workspace UI separates real compile errors from Unity service issues
 test('secure Remote Command Inbox user flow is visible and fully wired', () => {
   assert.match(html, /CHATGPT REMOTE COMMAND INBOX/i);
   assert.match(html, /Dedicated Command Mailbox/i);
-  assert.match(html, /sender authentication evidence/i);
+  assert.match(html, /cryptographically verifies DKIM/i);
   assert.match(renderer, /saveRemoteInbox/);
   assert.match(renderer, /checkRemoteInboxNow/);
   assert.match(main, /bridge:remote-inbox-save/);

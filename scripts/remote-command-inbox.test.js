@@ -11,7 +11,15 @@ const {
   validateCommandEnvelope,
   RemoteCommandInbox,
   sanitizeResultForMirror,
+  normalizeEmail,
 }=require('../src/services/remote-command-inbox');
+
+
+
+test('email normalization uses parser-compatible matching for normal and display-name addresses',()=>{
+  assert.equal(normalizeEmail('Nexa Sender <Sender+unity@example.com>'),'sender+unity@example.com');
+  assert.equal(normalizeEmail('plain.user@example.com'),'plain.user@example.com');
+});
 
 test('remote command envelope survives gzip+base64 email body encoding',()=>{
   const envelope={schema_version:1,channel_id:'channel_1234567890',challenge:'challenge_1234567890',command_id:'cmd_12345678',issued_at:new Date().toISOString(),expires_at:new Date(Date.now()+60000).toISOString(),actions:[{action:'write_text_file',args:{path:'D:/Game/A.cs',content:'hello'}}]};

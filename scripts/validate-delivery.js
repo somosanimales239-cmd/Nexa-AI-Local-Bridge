@@ -10,7 +10,7 @@ const readJson = file => {
 };
 const exists = file => fs.existsSync(path.join(root, file));
 const packageJson = readJson('package.json');
-const requiredScripts = ['validate:delivery', 'validate:project', 'test', 'test:acceptance', 'test:implementation', 'ui:smoke'];
+const requiredScripts = ['validate:appbuilder', 'validate:delivery', 'validate:project', 'test', 'test:acceptance', 'test:implementation', 'ui:smoke'];
 for (const name of requiredScripts) {
   if (!packageJson.scripts || typeof packageJson.scripts[name] !== 'string' || !packageJson.scripts[name].trim()) {
     failures.push(`package.json is missing required script: ${name}`);

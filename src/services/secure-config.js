@@ -40,6 +40,10 @@ class SecureConfig {
       remoteInboxAllowedSender: typeof raw.remoteInboxAllowedSender === 'string' ? raw.remoteInboxAllowedSender : '',
       remoteInboxPollSeconds: Number.isFinite(raw.remoteInboxPollSeconds) ? Math.max(10, Math.min(Number(raw.remoteInboxPollSeconds), 300)) : 15,
       remoteInboxRequireAuth: raw.remoteInboxRequireAuth !== false,
+      remoteInboxSmtpHost: typeof raw.remoteInboxSmtpHost === 'string' && raw.remoteInboxSmtpHost.trim() ? raw.remoteInboxSmtpHost.trim() : 'smtp.hostinger.com',
+      remoteInboxSmtpPort: Number.isInteger(raw.remoteInboxSmtpPort) ? raw.remoteInboxSmtpPort : 465,
+      remoteInboxSendResults: raw.remoteInboxSendResults !== false,
+      remoteInboxResultRecipient: typeof raw.remoteInboxResultRecipient === 'string' && raw.remoteInboxResultRecipient.trim() ? raw.remoteInboxResultRecipient.trim() : (typeof raw.remoteInboxAllowedSender === 'string' ? raw.remoteInboxAllowedSender : ''),
       remoteInboxConfigured: typeof raw.remoteInboxPasswordEncrypted === 'string' && raw.remoteInboxPasswordEncrypted.length > 0,
       paired: typeof raw.tokenEncrypted === 'string' && raw.tokenEncrypted.length > 0,
     };
@@ -107,7 +111,7 @@ class SecureConfig {
     }
   }
 
-  saveRemoteInbox({ enabled, host, port, username, password, allowedSender, pollSeconds, requireAuth }) {
+  saveRemoteInbox({ enabled, host, port, username, password, allowedSender, pollSeconds, requireAuth, smtpHost, smtpPort, sendResults, resultRecipient }) {
     if (!this.safeStorage.isEncryptionAvailable()) throw new Error('Secure Remote Command Inbox password storage is unavailable.');
     const raw = this.readRaw();
     let encrypted = raw.remoteInboxPasswordEncrypted || '';
@@ -119,9 +123,15 @@ class SecureConfig {
     const cleanUser = String(username || '').trim();
     const cleanSender = String(allowedSender || '').trim();
     const cleanPort = Number(port || 995);
+    const cleanSmtpHost = String(smtpHost || raw.remoteInboxSmtpHost || 'smtp.hostinger.com').trim();
+    const cleanSmtpPort = Number(smtpPort || raw.remoteInboxSmtpPort || 465);
+    const cleanResultRecipient = String(resultRecipient || cleanSender).trim();
     if (!/^[A-Za-z0-9.-]+$/.test(cleanHost)) throw new Error('Enter a valid POP3 host.');
     if (!Number.isInteger(cleanPort) || cleanPort < 1 || cleanPort > 65535) throw new Error('Enter a valid POP3 port.');
     if (!cleanUser || !cleanSender) throw new Error('Command mailbox username and allowed sender are required.');
+    if (!/^[A-Za-z0-9.-]+$/.test(cleanSmtpHost)) throw new Error('Enter a valid SMTP host.');
+    if (!Number.isInteger(cleanSmtpPort) || cleanSmtpPort < 1 || cleanSmtpPort > 65535) throw new Error('Enter a valid SMTP port.');
+    if (sendResults !== false && !cleanResultRecipient) throw new Error('A result recipient email is required when SMTP result delivery is enabled.');
     const next = {
       ...raw,
       remoteInboxEnabled: enabled === true,
@@ -132,6 +142,10 @@ class SecureConfig {
       remoteInboxAllowedSender: cleanSender,
       remoteInboxPollSeconds: Math.max(10, Math.min(Number(pollSeconds || 15), 300)),
       remoteInboxRequireAuth: requireAuth !== false,
+      remoteInboxSmtpHost: cleanSmtpHost,
+      remoteInboxSmtpPort: cleanSmtpPort,
+      remoteInboxSendResults: sendResults !== false,
+      remoteInboxResultRecipient: cleanResultRecipient,
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });

@@ -26,7 +26,7 @@ const els = {
   workspaceBadge: $('#workspaceBadge'), workspaceMessage: $('#workspaceMessage'), workspaceResults: $('#workspaceResults'),
   githubBadge: $('#githubBadge'), githubRepo: $('#githubRepo'), githubBranch: $('#githubBranch'), githubToken: $('#githubToken'), githubTokenHint: $('#githubTokenHint'),
   githubSyncEnabled: $('#githubSyncEnabled'), githubApplyEnabled: $('#githubApplyEnabled'), githubSaveBtn: $('#githubSaveBtn'), githubTestBtn: $('#githubTestBtn'), githubSyncBtn: $('#githubSyncBtn'), githubMessage: $('#githubMessage'), githubResults: $('#githubResults'),
-  remoteInboxBadge: $('#remoteInboxBadge'), remoteInboxHost: $('#remoteInboxHost'), remoteInboxPort: $('#remoteInboxPort'), remoteInboxUsername: $('#remoteInboxUsername'), remoteInboxPassword: $('#remoteInboxPassword'), remoteInboxPasswordHint: $('#remoteInboxPasswordHint'), remoteInboxAllowedSender: $('#remoteInboxAllowedSender'), remoteInboxPollSeconds: $('#remoteInboxPollSeconds'), remoteInboxEnabled: $('#remoteInboxEnabled'), remoteInboxRequireAuth: $('#remoteInboxRequireAuth'), remoteInboxSaveBtn: $('#remoteInboxSaveBtn'), remoteInboxTestBtn: $('#remoteInboxTestBtn'), remoteInboxCheckBtn: $('#remoteInboxCheckBtn'), remoteInboxClearBtn: $('#remoteInboxClearBtn'), remoteInboxMessage: $('#remoteInboxMessage'), remoteInboxResults: $('#remoteInboxResults'),
+  remoteInboxBadge: $('#remoteInboxBadge'), remoteInboxHost: $('#remoteInboxHost'), remoteInboxPort: $('#remoteInboxPort'), remoteInboxUsername: $('#remoteInboxUsername'), remoteInboxPassword: $('#remoteInboxPassword'), remoteInboxPasswordHint: $('#remoteInboxPasswordHint'), remoteInboxAllowedSender: $('#remoteInboxAllowedSender'), remoteInboxPollSeconds: $('#remoteInboxPollSeconds'), remoteInboxSmtpHost: $('#remoteInboxSmtpHost'), remoteInboxSmtpPort: $('#remoteInboxSmtpPort'), remoteInboxResultRecipient: $('#remoteInboxResultRecipient'), remoteInboxSendResults: $('#remoteInboxSendResults'), remoteInboxEnabled: $('#remoteInboxEnabled'), remoteInboxRequireAuth: $('#remoteInboxRequireAuth'), remoteInboxSaveBtn: $('#remoteInboxSaveBtn'), remoteInboxTestBtn: $('#remoteInboxTestBtn'), remoteInboxCheckBtn: $('#remoteInboxCheckBtn'), remoteInboxClearBtn: $('#remoteInboxClearBtn'), remoteInboxMessage: $('#remoteInboxMessage'), remoteInboxResults: $('#remoteInboxResults'),
 };
 
 let latestState = null;
@@ -75,7 +75,7 @@ function statusClass(status) {
 function render(state) {
   if (!state) return;
   latestState = state;
-  els.version.textContent = `v${text(state.version || '1.6.0')}`;
+  els.version.textContent = `v${text(state.version || '1.6.2')}`;
   els.statusText.textContent = text((state.status || 'offline').replaceAll('-', ' ').toUpperCase());
   els.statusPill.className = `status-pill ${statusClass(state.status)}`;
   els.statusMessage.textContent = text(state.statusMessage || '');
@@ -109,6 +109,9 @@ function render(state) {
     els.remoteInboxUsername.value = state.remoteInboxUsername || '';
     els.remoteInboxAllowedSender.value = state.remoteInboxAllowedSender || '';
     els.remoteInboxPollSeconds.value = state.remoteInboxPollSeconds || 15;
+    els.remoteInboxSmtpHost.value = state.remoteInboxSmtpHost || 'smtp.hostinger.com';
+    els.remoteInboxSmtpPort.value = state.remoteInboxSmtpPort || 465;
+    els.remoteInboxResultRecipient.value = state.remoteInboxResultRecipient || state.remoteInboxAllowedSender || '';
   }
 
   els.autoConnect.checked = state.autoConnect === true;
@@ -119,6 +122,7 @@ function render(state) {
   els.githubApplyEnabled.checked = state.githubApplyEnabled === true;
   els.remoteInboxEnabled.checked = state.remoteInboxEnabled === true;
   els.remoteInboxRequireAuth.checked = state.remoteInboxRequireAuth !== false;
+  els.remoteInboxSendResults.checked = state.remoteInboxSendResults !== false;
   els.remoteInboxPassword.placeholder = state.remoteInboxConfigured ? 'Stored securely — leave blank to reuse' : 'Dedicated mailbox password';
   els.remoteInboxPasswordHint.textContent = state.remoteInboxConfigured
     ? 'Mailbox password is encrypted with Electron safeStorage. Leave blank to reuse it.'
@@ -227,6 +231,9 @@ els.remoteInboxPort.addEventListener('input', () => { formTouched = true; });
 els.remoteInboxUsername.addEventListener('input', () => { formTouched = true; });
 els.remoteInboxAllowedSender.addEventListener('input', () => { formTouched = true; });
 els.remoteInboxPollSeconds.addEventListener('input', () => { formTouched = true; });
+els.remoteInboxSmtpHost.addEventListener('input', () => { formTouched = true; });
+els.remoteInboxSmtpPort.addEventListener('input', () => { formTouched = true; });
+els.remoteInboxResultRecipient.addEventListener('input', () => { formTouched = true; });
 
 els.testBtn.addEventListener('click', () => withBusy(els.testBtn, async () => {
   const result = await window.nexaBridge.testConnection(payload());
@@ -325,12 +332,16 @@ function remoteInboxPayload() {
     allowedSender: els.remoteInboxAllowedSender.value.trim(),
     pollSeconds: Number(els.remoteInboxPollSeconds.value || 15),
     requireAuth: els.remoteInboxRequireAuth.checked,
+    smtpHost: els.remoteInboxSmtpHost.value.trim() || 'smtp.hostinger.com',
+    smtpPort: Number(els.remoteInboxSmtpPort.value || 465),
+    sendResults: els.remoteInboxSendResults.checked,
+    resultRecipient: els.remoteInboxResultRecipient.value.trim() || els.remoteInboxAllowedSender.value.trim(),
   };
 }
 
 els.remoteInboxTestBtn.addEventListener('click', () => withBusy(els.remoteInboxTestBtn, async () => {
   const result = await window.nexaBridge.testRemoteInbox(remoteInboxPayload());
-  showTest(result.ok ? `Secure mailbox login succeeded.${result.message_count === null || result.message_count === undefined ? '' : ` ${result.message_count} message${result.message_count===1?'':'s'} currently in mailbox.`}` : `Mailbox test failed: ${result.error}`, !!result.ok);
+  showTest(result.ok ? `Secure mailbox transport succeeded.${result.message_count === null || result.message_count === undefined ? '' : ` ${result.message_count} message${result.message_count===1?'':'s'} currently in mailbox.`}${result.smtp_skipped ? ' SMTP result delivery is disabled.' : ' SMTP result login also passed.'}` : `Mailbox test failed: ${result.error}`, !!result.ok);
 }));
 
 els.remoteInboxSaveBtn.addEventListener('click', () => withBusy(els.remoteInboxSaveBtn, async () => {
@@ -338,7 +349,7 @@ els.remoteInboxSaveBtn.addEventListener('click', () => withBusy(els.remoteInboxS
   if (result.ok) {
     els.remoteInboxPassword.value = '';
     formTouched = false;
-    showTest('Remote Command Inbox verified and saved securely. Nexa can now receive permission-gated command packages.', true);
+    showTest('Remote Command Inbox verified and saved securely. POP3S commands, cryptographic DKIM checks, attachments, and SMTP result delivery are ready.', true);
   } else showTest(`Remote Command Inbox setup failed: ${result.error}`, false);
 }));
 

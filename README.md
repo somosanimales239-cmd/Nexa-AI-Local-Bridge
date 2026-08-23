@@ -1,8 +1,14 @@
-# Nexa AI Local Bridge 1.6.0
+# Nexa AI Local Bridge 1.6.2
 
 Windows companion for Nexa AI Computer Bridge.
 
-## 1.6.0 — Direct Remote Work Channel
+## 1.6.2 — Direct Remote Work Channel
+
+### App Builder parser compatibility hardening
+
+- Replaced the MIME encoded-word regex literal that Nexa App Builder's conservative local delimiter scanner misclassified as unterminated.
+- Added a package-wide `validate:appbuilder` gate that mirrors the App Builder delimiter/regex scanner before any future build is dispatched.
+- The final delivery is checked with both Node syntax validation and the actual PHP scanner logic recovered from the App Builder source used for this project.
 
 This release keeps the working Hostinger + Unity + GitHub mirror from 1.5.0 and adds a separate, transactional Remote Command Inbox so remote work no longer depends on GitHub file-write permissions.
 
@@ -72,7 +78,7 @@ GitHub Remote Workspace remains available for:
 
 The old GitHub write-back switch remains only as a compatibility option. For direct remote work use the Remote Command Inbox instead, because it does not depend on ChatGPT's GitHub connector having repository file-write permission.
 
-## One-time setup after installing 1.6.0
+## One-time setup after installing 1.6.2
 
 1. Keep your existing Hostinger pairing and Allowed Folders.
 2. Keep your Unity Project Path configured.
@@ -94,4 +100,4 @@ The old GitHub write-back switch remains only as a compatibility option. For dir
 
 ## Validation
 
-The 1.6.0 source package includes syntax checks, delivery graph validation, project validation, baseline tests, implementation tests and acceptance tests covering the Remote Command Inbox, transactional executor, Unity integration, diagnostics, security gates, path restrictions and rollback behavior.
+The 1.6.2 source package includes syntax checks, delivery graph validation, project validation, baseline tests, implementation tests and acceptance tests covering the Remote Command Inbox, transactional executor, Unity integration, diagnostics, security gates, path restrictions and rollback behavior.

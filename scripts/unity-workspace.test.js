@@ -63,7 +63,7 @@ test('Unity integration installs versioned plugin only inside an allowed root',a
   assert.equal(result.ok,true);
   assert.equal(result.plugin_version,BRIDGE_PLUGIN_VERSION);
   assert.equal(fs.existsSync(pluginFile),true);
-  assert.match(fs.readFileSync(pluginFile,'utf8'),/NEXA_BRIDGE_PLUGIN_VERSION = "1\.6\.0"/);
+  assert.match(fs.readFileSync(pluginFile,'utf8'),/NEXA_BRIDGE_PLUGIN_VERSION = "1\.6\.2"/);
   assert.match(fs.readFileSync(pluginFile,'utf8'),/compilationStarted/);
 });
 
