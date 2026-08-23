@@ -1,8 +1,16 @@
-# Nexa AI Local Bridge 1.6.2
+# Nexa AI Local Bridge 1.6.3
 
 Windows companion for Nexa AI Computer Bridge.
 
-## 1.6.2 — Direct Remote Work Channel
+## 1.6.3 — Direct Remote Work Channel
+
+
+### Gmail / DKIM interoperability fix
+
+- Fixed RFC 6376 DKIM header oversigning verification. Gmail may intentionally list `From` more times in `h=` than the message contains; those nonexistent oversigned instances are null input, not a verification error.
+- Fixed the DKIM-Signature canonicalization boundary so the signature field is hashed without a trailing CRLF, as required by RFC 6376.
+- Added a real RSA cryptographic regression test for an oversigned `From` header so this exact Gmail failure cannot silently return.
+- This fix preserves cryptographic DKIM verification; it does not weaken the sender allowlist, challenge, expiration, replay protection, Hostinger permission gates, Allowed Folders, backups or rollback.
 
 ### App Builder parser compatibility hardening
 
@@ -78,7 +86,7 @@ GitHub Remote Workspace remains available for:
 
 The old GitHub write-back switch remains only as a compatibility option. For direct remote work use the Remote Command Inbox instead, because it does not depend on ChatGPT's GitHub connector having repository file-write permission.
 
-## One-time setup after installing 1.6.2
+## One-time setup after installing 1.6.3
 
 1. Keep your existing Hostinger pairing and Allowed Folders.
 2. Keep your Unity Project Path configured.
@@ -100,4 +108,4 @@ The old GitHub write-back switch remains only as a compatibility option. For dir
 
 ## Validation
 
-The 1.6.2 source package includes syntax checks, delivery graph validation, project validation, baseline tests, implementation tests and acceptance tests covering the Remote Command Inbox, transactional executor, Unity integration, diagnostics, security gates, path restrictions and rollback behavior.
+The 1.6.3 source package includes syntax checks, delivery graph validation, project validation, baseline tests, implementation tests and acceptance tests covering the Remote Command Inbox, transactional executor, Unity integration, diagnostics, security gates, path restrictions and rollback behavior.

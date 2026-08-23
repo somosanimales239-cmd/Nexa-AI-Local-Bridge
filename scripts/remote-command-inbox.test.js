@@ -4,8 +4,10 @@ const assert=require('node:assert/strict');
 const fs=require('fs');
 const os=require('os');
 const path=require('path');
+const crypto=require('crypto');
 const {
   parseEmail,
+  verifyDkimSignatures,
   buildCommandEmailBody,
   extractCommandEnvelope,
   validateCommandEnvelope,
@@ -92,4 +94,33 @@ test('mirrored command results redact secret fields and omit full file content',
   assert.match(String(safe.content),/CONTENT_OMITTED/);
   assert.equal(safe.token,'[REDACTED_FIELD]');
   assert.doesNotMatch(safe.stdout,/abcdefghijklmnopqrstuvwxyz/);
+});
+
+
+test('cryptographic DKIM verification accepts RFC 6376 header oversigning used by Gmail', async()=>{
+  const {privateKey,publicKey}=crypto.generateKeyPairSync('rsa',{modulusLength:1024});
+  const body='hello from nexa\r\n';
+  const bodyHash=crypto.createHash('sha256').update(Buffer.from(body,'utf8')).digest('base64');
+  const h='from:to:subject:from';
+  const dkimValueWithoutSignature=` v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=nexa; h=${h}; bh=${bodyHash}; b=`;
+  const signedData=[
+    'from:sender@example.com\r\n',
+    'to:receiver@example.net\r\n',
+    'subject:Nexa oversign test\r\n',
+    `dkim-signature:${dkimValueWithoutSignature.trim().replace(/[ \t]+/g,' ')}`,
+  ].join('');
+  const signature=crypto.sign('RSA-SHA256',Buffer.from(signedData,'utf8'),privateKey).toString('base64');
+  const raw=[
+    'From: sender@example.com',
+    'To: receiver@example.net',
+    'Subject: Nexa oversign test',
+    `DKIM-Signature:${dkimValueWithoutSignature}${signature}`,
+    '',
+    'hello from nexa',
+    '',
+  ].join('\r\n');
+  const der=publicKey.export({format:'der',type:'spki'}).toString('base64');
+  const result=await verifyDkimSignatures(raw,'sender@example.com',{resolveTxt:async()=>[[`v=DKIM1; k=rsa; p=${der}`]]});
+  assert.equal(result.ok,true,result.error||'DKIM verification should pass');
+  assert.equal(result.domain,'example.com');
 });

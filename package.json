@@ -1,6 +1,6 @@
 {
   "name": "nexa-ai-local-bridge",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Secure Windows companion for Nexa AI Computer Bridge with Hostinger policy control, Unity mirroring, GitHub verification snapshots, and a transactional POP3S Remote Command Inbox for direct permission-gated Unity and Windows work.",
   "main": "main.js",
   "author": "Nexa",

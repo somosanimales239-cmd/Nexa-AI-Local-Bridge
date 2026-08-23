@@ -408,14 +408,29 @@ async function verifyDkimSignatures(raw, fromAddress, {resolveTxt=dns.promises.r
 
       const used=new Set();
       let signedData='';
+      let actualFromHeaderSigned=false;
       for(const name of signedHeaderNames){
         let found=-1;
         for(let i=fields.length-1;i>=0;i-=1){ if(!used.has(i) && fields[i].nameLower===name && fields[i]!==dkimField){found=i;break;} }
-        if(found<0) throw new Error(`DKIM signed header is missing: ${name}.`);
+
+        // RFC 6376 permits header oversigning: h= may intentionally name a
+        // header more times than it exists. Missing oversigned instances add
+        // no bytes to the signing input; if an attacker later inserts that
+        // header, verification will fail because the new instance is selected.
+        // Gmail uses this technique for From and other sensitive headers.
+        if(found<0) continue;
+
         used.add(found);
         signedData += canonicalizeHeaderField(fields[found],headerCanon);
+        if(name==='from') actualFromHeaderSigned=true;
       }
-      signedData += canonicalizeHeaderField(dkimField,headerCanon,removeDkimSignatureValue(dkimField.valueRaw));
+      if(!actualFromHeaderSigned) throw new Error('DKIM signature did not bind the actual From header.');
+
+      // RFC 6376 signs the DKIM-Signature field last with b= emptied,
+      // but unlike the normal signed header fields it is hashed WITHOUT
+      // its trailing CRLF.
+      const canonicalDkim=canonicalizeHeaderField(dkimField,headerCanon,removeDkimSignatureValue(dkimField.valueRaw));
+      signedData += canonicalDkim.endsWith('\r\n') ? canonicalDkim.slice(0,-2) : canonicalDkim;
       const key=await resolveDkimPublicKey(tags.s,tags.d,resolveTxt);
       const signature=Buffer.from(String(tags.b).replace(/\s+/g,''),'base64');
       if(!signature.length) throw new Error('DKIM signature value is empty.');
