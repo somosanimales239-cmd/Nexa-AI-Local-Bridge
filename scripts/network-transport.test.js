@@ -27,7 +27,7 @@ test('HTTP/1.1 transport posts JSON and bearer token without fetch', async () =>
     req.on('end', () => {
       assert.equal(req.method, 'POST');
       assert.equal(req.headers.authorization, 'Bearer nexa_test');
-      assert.match(String(req.headers['user-agent']), /Nexa-AI-Local-Bridge\/1\.2\.2/);
+      assert.match(String(req.headers['user-agent']), /Nexa-AI-Local-Bridge\/1\.7\.0/);
       assert.equal(req.headers.connection, 'close');
       assert.deepEqual(JSON.parse(body), { action: 'heartbeat' });
       res.writeHead(200, { 'Content-Type': 'application/json' });

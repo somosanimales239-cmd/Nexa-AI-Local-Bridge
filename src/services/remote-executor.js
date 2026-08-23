@@ -18,13 +18,14 @@ const MAX_BACKUP_BYTES = 256 * 1024 * 1024;
 
 const ACTION_CAPABILITIES = Object.freeze({
   computer_status: 'read_files', list_drives: 'read_files', list_directory: 'read_files', read_file: 'read_files',
+  file_info: 'read_files', file_hash: 'read_files', find_files: 'read_files', find_file: 'read_files',
   get_processes: 'read_files', get_gpu_status: 'read_files', get_cuda_status: 'read_files',
   write_text_file: 'write_files', write_base64_file: 'write_files', write_attachment_file: 'write_files', create_directory: 'write_files', delete_path: 'write_files',
-  copy_path: 'write_files', move_path: 'write_files',
+  copy_path: 'write_files', move_path: 'write_files', download_bridge_asset: 'write_files', upload_bridge_file: 'read_files',
   run_cmd: 'cmd', run_powershell: 'powershell', run_python: 'python', run_git: 'git', run_process: 'cmd',
   run_blender: 'blender', start_local_process: 'local_servers', stop_process: 'local_servers',
-  download_file: 'browser',
-  unity_refresh: 'write_files', unity_capture: 'screenshots', unity_play: 'write_files', unity_stop: 'write_files',
+  download_file: 'browser', open_url: 'browser', capture_desktop: 'screenshots',
+  unity_status: 'read_files', unity_refresh: 'write_files', unity_capture: 'screenshots', unity_play: 'write_files', unity_stop: 'write_files',
   unity_pause: 'write_files', unity_unpause: 'write_files', unity_open_scene: 'write_files', unity_save_scene: 'write_files',
   unity_execute_menu_item: 'write_files', unity_editor_job: 'write_files', unity_wait_for_compile: 'read_files',
 });
@@ -50,7 +51,7 @@ function ensureCapability(action, context) {
   if (!required) throw new Error(`Unsupported remote action: ${action}.`);
   if (!context?.policy?.canExecute(required)) throw new Error(`${action} requires Hostinger permission: ${required}.`);
   if (action === 'download_file' && !context.policy.canExecute('write_files')) throw new Error('download_file also requires Write Files permission.');
-  const fullComputerActions=new Set(['run_cmd','run_powershell','run_python','run_git','run_process','run_blender','start_local_process','stop_process','unity_editor_job']);
+  const fullComputerActions=new Set(['run_cmd','run_powershell','run_python','run_git','run_process','run_blender','start_local_process','stop_process','unity_editor_job','capture_desktop','open_url']);
   if (fullComputerActions.has(action) && context.policy.fullComputerMode !== true) throw new Error(`${action} requires Full Computer Mode in Hostinger in addition to ${required}.`);
   return required;
 }
@@ -104,6 +105,15 @@ async function runExecutable(executable, args, options = {}) {
       });
     });
   });
+}
+
+
+function requireProcessSuccess(result, args = {}) {
+  if (result && Number(result.exit_code) !== 0 && args.allow_nonzero_exit !== true) {
+    const detail=String(result.stderr||result.stdout||'').trim().slice(0,4000);
+    throw new Error(`Process exited with code ${result.exit_code}${detail?`: ${detail}`:''}`);
+  }
+  return result;
 }
 
 class BackupTransaction {
@@ -273,7 +283,7 @@ async function downloadFile(args, context, tx) {
   const result = await new Promise((resolve, reject) => {
     const file = fs.createWriteStream(tmp, { flags:'w' });
     let bytes = 0;
-    const request = https.get(url, { headers:{'User-Agent':'Nexa-AI-Local-Bridge/1.6.2'} }, response => {
+    const request = https.get(url, { headers:{'User-Agent':'Nexa-AI-Local-Bridge/1.7.0'} }, response => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         file.close(); fs.rmSync(tmp,{force:true}); reject(new Error('download_file redirects are blocked; provide the final HTTPS URL.')); return;
       }
@@ -293,6 +303,34 @@ async function downloadFile(args, context, tx) {
   return { path:target, bytes:result.bytes, sha256:sha256File(target), source_host:url.host };
 }
 
+
+
+async function downloadBridgeAsset(args, context, tx) {
+  if(!context?.bridgeFiles?.download)throw new Error('Hostinger Bridge file download is not configured.');
+  const target=assertAllowedPath(args.path,context.allowedRoots);const assetId=String(args.asset_id||args.id||'').trim();if(!assetId)throw new Error('download_bridge_asset requires args.asset_id.');
+  await tx.backup(target);const payload=await context.bridgeFiles.download(assetId,Math.min(Number(args.max_bytes||MAX_DOWNLOAD),MAX_DOWNLOAD));if(!payload||!Buffer.isBuffer(payload.buffer))throw new Error('Bridge asset download returned invalid data.');
+  const sha=sha256Buffer(payload.buffer);const expected=String(args.sha256||payload.sha256||'').trim().toLowerCase();if(expected&&sha!==expected)throw new Error('Bridge asset SHA-256 mismatch.');
+  await fs.promises.mkdir(path.dirname(target),{recursive:true});const tmp=`${target}.nexa-bridge-${Date.now()}`;await fs.promises.writeFile(tmp,payload.buffer);await fs.promises.rename(tmp,target).catch(async()=>{await fs.promises.copyFile(tmp,target);await fs.promises.rm(tmp,{force:true});});
+  return{path:target,asset_id:assetId,bytes:payload.buffer.length,sha256:sha,source_name:payload.filename||''};
+}
+
+async function uploadBridgeFileAction(args, context) {
+  if(!context?.bridgeFiles?.upload)throw new Error('Hostinger Bridge file upload is not configured.');
+  const source=assertAllowedPath(args.path,context.allowedRoots);const stat=await fs.promises.stat(source);if(!stat.isFile())throw new Error('upload_bridge_file requires a file path.');if(stat.size>MAX_DOWNLOAD)throw new Error('upload_bridge_file exceeds 100 MiB.');
+  const buffer=await fs.promises.readFile(source);const sha=sha256Buffer(buffer);const result=await context.bridgeFiles.upload(path.basename(source),buffer,sha);return{path:source,bytes:buffer.length,sha256:sha,bridge_file:result.file||result};
+}
+
+async function captureDesktop(args, context, tx) {
+  if(process.platform!=='win32')throw new Error('capture_desktop is available on Windows only.');
+  const target=assertAllowedPath(args.path,context.allowedRoots);await tx.backup(target);await fs.promises.mkdir(path.dirname(target),{recursive:true});
+  const ps=`Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height); $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left,$b.Top,0,0,$bmp.Size); $bmp.Save('${target.replace(/'/g,"''")}',[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose();`;
+  const result=await runExecutable('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',ps],{timeout_ms:args.timeout_ms||30000});requireProcessSuccess(result,args);const st=await fs.promises.stat(target);return{path:target,bytes:st.size,sha256:sha256File(target)};
+}
+
+function openUrl(args) {
+  const url=new URL(String(args.url||''));if(!['https:','http:'].includes(url.protocol))throw new Error('open_url accepts HTTP/HTTPS URLs only.');
+  const child=spawn('rundll32.exe',['url.dll,FileProtocolHandler',url.toString()],{windowsHide:true,detached:true,stdio:'ignore'});child.unref();return{opened:true,url:url.toString(),pid:child.pid};
+}
 
 function startDetachedProcess(executable,args,options={}){
   const child=spawn(executable,Array.isArray(args)?args.map(String):[],{cwd:options.cwd,windowsHide:true,shell:false,detached:true,stdio:'ignore',env:{...process.env}});
@@ -371,7 +409,7 @@ async function executeAction(actionRow, context, tx, commandId) {
   const action = String(actionRow.action || '').trim();
   ensureCapability(action, context);
   const args = actionRow.args && typeof actionRow.args === 'object' ? actionRow.args : {};
-  if (['computer_status','list_drives','list_directory','read_file','get_processes','get_gpu_status','get_cuda_status'].includes(action)) {
+  if (['computer_status','list_drives','list_directory','read_file','file_info','file_hash','find_files','find_file','get_processes','get_gpu_status','get_cuda_status'].includes(action)) {
     return executeReadOnlyCommand({ action, capability:'read_files', args }, context);
   }
   switch(action){
@@ -382,18 +420,23 @@ async function executeAction(actionRow, context, tx, commandId) {
     case 'delete_path': return deletePath(args,context,tx);
     case 'copy_path': return copyPath(args,context,tx);
     case 'move_path': return movePath(args,context,tx);
+    case 'download_bridge_asset': return downloadBridgeAsset(args,context,tx);
+    case 'upload_bridge_file': return uploadBridgeFileAction(args,context);
     case 'download_file': return downloadFile(args,context,tx);
-    case 'run_cmd': return runExecutable('cmd.exe',['/d','/s','/c',String(args.command||'')],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms});
-    case 'run_powershell': return runExecutable('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',String(args.command||'')],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms});
-    case 'run_python': return runExecutable(String(args.executable||'python.exe'),Array.isArray(args.args)?args.args:['-c',String(args.code||'')],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms});
-    case 'run_git': return runExecutable('git.exe',Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms});
+    case 'capture_desktop': return captureDesktop(args,context,tx);
+    case 'open_url': return openUrl(args);
+    case 'run_cmd': return requireProcessSuccess(await runExecutable('cmd.exe',['/d','/s','/c',String(args.command||'')],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms}),args);
+    case 'run_powershell': return requireProcessSuccess(await runExecutable('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',String(args.command||'')],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms}),args);
+    case 'run_python': return requireProcessSuccess(await runExecutable(String(args.executable||'python.exe'),Array.isArray(args.args)?args.args:['-c',String(args.code||'')],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms}),args);
+    case 'run_git': return requireProcessSuccess(await runExecutable('git.exe',Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms}),args);
     case 'run_process': {
       const executable=String(args.executable||'').trim(); if(!executable) throw new Error('run_process requires args.executable.');
-      return runExecutable(executable,Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms});
+      return requireProcessSuccess(await runExecutable(executable,Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms}),args);
     }
-    case 'run_blender': { const executable=String(args.executable||'blender.exe').trim(); return runExecutable(executable,Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms}); }
+    case 'run_blender': { const executable=String(args.executable||'blender.exe').trim(); return requireProcessSuccess(await runExecutable(executable,Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots),timeout_ms:args.timeout_ms}),args); }
     case 'start_local_process': { const executable=String(args.executable||'').trim(); if(!executable)throw new Error('start_local_process requires args.executable.'); return startDetachedProcess(executable,Array.isArray(args.args)?args.args:[],{cwd:resolveCwd(args.cwd,context.allowedRoots)}); }
     case 'stop_process': return stopProcess(args.pid);
+    case 'unity_status': { const root=selectUnityRoot(args,context); return unityStatus(root); }
     case 'unity_refresh': { const root=selectUnityRoot(args,context); return requestUnityAction(root,context.allowedRoots,{action:'refresh_assets'}); }
     case 'unity_capture': { const root=selectUnityRoot(args,context); return requestUnityAction(root,context.allowedRoots,{action:'capture_views'}); }
     case 'unity_play': { const root=selectUnityRoot(args,context); return requestUnityAction(root,context.allowedRoots,{action:'play'}); }
@@ -427,7 +470,7 @@ async function executeRemoteEnvelope(envelope, context) {
       const row=envelope.actions[i];
       const result=await executeAction(row,context,tx,commandId);
       results.push({index:i,action:row.action,ok:true,result});
-      if(result?.path && ['write_text_file','write_base64_file','write_attachment_file','create_directory','delete_path','download_file'].includes(row.action)) changedFiles.push(result.path);
+      if(result?.path && ['write_text_file','write_base64_file','write_attachment_file','create_directory','delete_path','download_file','download_bridge_asset','capture_desktop'].includes(row.action)) changedFiles.push(result.path);
       if(result?.destination && ['copy_path','move_path'].includes(row.action)) changedFiles.push(result.destination);
     }
     if(envelope.options?.verify_unity_compile===true){
@@ -453,11 +496,12 @@ async function executeRemoteEnvelope(envelope, context) {
 }
 
 async function executeSingleRemoteCommand(command, context) {
-  const envelope={
-    command_id:String(command.uuid||`hostinger_${Date.now()}`),
-    actions:[{action:command.action,args:command.args||{}}],
-    options:{rollback_on_error:true,verify_unity_compile:false},
-  };
+  if(String(command.action||'')==='remote_envelope'){
+    const payload=command.args&&typeof command.args==='object'?command.args:{};
+    if(!Array.isArray(payload.actions)||payload.actions.length<1||payload.actions.length>50)throw new Error('remote_envelope requires 1-50 actions.');
+    return executeRemoteEnvelope({command_id:String(command.uuid||`hostinger_${Date.now()}`),actions:payload.actions,options:payload.options&&typeof payload.options==='object'?payload.options:{rollback_on_error:true}},context);
+  }
+  const envelope={command_id:String(command.uuid||`hostinger_${Date.now()}`),actions:[{action:command.action,args:command.args||{}}],options:{rollback_on_error:true,verify_unity_compile:false}};
   return executeRemoteEnvelope(envelope,context);
 }
 

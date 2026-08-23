@@ -3,11 +3,13 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const crypto = require('crypto');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 
 const SUPPORTED_ACTIONS = new Set([
   'computer_status', 'list_drives', 'list_directory', 'read_file',
+  'file_info', 'file_hash', 'find_files', 'find_file',
   'get_processes', 'get_gpu_status', 'get_cuda_status'
 ]);
 
@@ -122,6 +124,35 @@ async function readTextFile(target, allowedRoots) {
   }
 }
 
+
+async function fileInfo(target, allowedRoots) {
+  const resolved=assertAllowedPath(target,allowedRoots);
+  let stat;try{stat=await fs.promises.stat(resolved);}catch(error){if(error.code==='ENOENT')return{path:resolved,exists:false};throw error;}
+  return {path:resolved,exists:true,type:stat.isDirectory()?'directory':stat.isFile()?'file':'other',size_bytes:stat.isFile()?stat.size:null,created_at:stat.birthtime?.toISOString?.()||'',modified_at:stat.mtime?.toISOString?.()||'',extension:stat.isFile()?path.extname(resolved).toLowerCase():''};
+}
+
+async function fileHash(target, allowedRoots) {
+  const resolved=assertAllowedPath(target,allowedRoots);const stat=await fs.promises.stat(resolved);if(!stat.isFile())throw new Error('file_hash requires a file path.');
+  const hash=crypto.createHash('sha256');const stream=fs.createReadStream(resolved);for await(const chunk of stream)hash.update(chunk);return{path:resolved,size_bytes:stat.size,sha256:hash.digest('hex')};
+}
+
+function wildcardRegex(pattern) {
+  const raw=String(pattern||'*').trim()||'*';const escaped=raw.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*').replace(/\?/g,'.');return new RegExp(`^${escaped}$`,'i');
+}
+
+async function findFiles(args, allowedRoots) {
+  const root=assertAllowedPath(args.path||args.root,allowedRoots);const stat=await fs.promises.stat(root);if(!stat.isDirectory())throw new Error('find_files root must be a directory.');
+  const rx=wildcardRegex(args.pattern||args.name||'*');const maxResults=Math.max(1,Math.min(Number(args.max_results||100),300));const maxDepth=Math.max(0,Math.min(Number(args.max_depth??12),30));const maxVisited=Math.max(100,Math.min(Number(args.max_visited||50000),150000));const deadline=Date.now()+Math.max(1000,Math.min(Number(args.timeout_ms||20000),60000));
+  const wantFiles=args.include_files!==false;const wantDirs=args.include_directories===true;const results=[];const stack=[{dir:root,depth:0}];let visited=0,truncated=false;
+  while(stack.length){if(Date.now()>deadline){truncated=true;break;}const item=stack.pop();let entries;try{entries=await fs.promises.readdir(item.dir,{withFileTypes:true});}catch{continue;}
+    for(const entry of entries){visited++;if(visited>maxVisited){truncated=true;break;}const full=path.join(item.dir,entry.name);if(entry.isSymbolicLink())continue;
+      if(entry.isDirectory()){if(wantDirs&&rx.test(entry.name)){results.push({path:full,type:'directory'});if(results.length>=maxResults){truncated=true;break;}}if(item.depth<maxDepth)stack.push({dir:full,depth:item.depth+1});}
+      else if(entry.isFile()&&wantFiles&&rx.test(entry.name)){let size=null,modified='';try{const st=await fs.promises.stat(full);size=st.size;modified=st.mtime.toISOString();}catch{}results.push({path:full,type:'file',size_bytes:size,modified_at:modified});if(results.length>=maxResults){truncated=true;break;}}
+    }if(truncated&&results.length>=maxResults)break;if(visited>maxVisited)break;
+  }
+  return{root,pattern:String(args.pattern||args.name||'*'),results,match_count:results.length,visited,truncated};
+}
+
 function parseCsvLine(line) {
   const values = [];
   let current = '';
@@ -181,6 +212,10 @@ async function executeReadOnlyCommand(command, context) {
     case 'list_drives': return { drives: listDrives() };
     case 'list_directory': return listDirectory(args.path, context.allowedRoots);
     case 'read_file': return readTextFile(args.path, context.allowedRoots);
+    case 'file_info': return fileInfo(args.path, context.allowedRoots);
+    case 'file_hash': return fileHash(args.path, context.allowedRoots);
+    case 'find_files': return findFiles(args, context.allowedRoots);
+    case 'find_file': return findFiles({ ...args, max_results: args.max_results || 25 }, context.allowedRoots);
     case 'get_processes': return getProcesses();
     case 'get_gpu_status': return getGpuStatus(context.systemInfo);
     case 'get_cuda_status': return getCudaStatus();

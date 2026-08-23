@@ -70,7 +70,7 @@ function requestNode(method, urlValue, token, body, timeoutMs = DEFAULT_TIMEOUT_
         'Authorization':`Bearer ${token}`,
         'Accept':'application/vnd.github+json',
         'X-GitHub-Api-Version':'2022-11-28',
-        'User-Agent':'Nexa-AI-Local-Bridge/1.6.2',
+        'User-Agent':'Nexa-AI-Local-Bridge/1.7.0',
         'Connection':'close',
         ...(payload ? {'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)} : {})
       }
@@ -99,7 +99,7 @@ function requestCurl(method, urlValue, token, body, timeoutMs = DEFAULT_TIMEOUT_
       `header = ${quoteCurlConfigValue(`Authorization: Bearer ${token}`)}`,
       `header = ${quoteCurlConfigValue('Accept: application/vnd.github+json')}`,
       `header = ${quoteCurlConfigValue('X-GitHub-Api-Version: 2022-11-28')}`,
-      `header = ${quoteCurlConfigValue('User-Agent: Nexa-AI-Local-Bridge/1.6.2')}`,
+      `header = ${quoteCurlConfigValue('User-Agent: Nexa-AI-Local-Bridge/1.7.0')}`,
       ...(payload ? [`header = ${quoteCurlConfigValue('Content-Type: application/json')}`,`data-binary = ${quoteCurlConfigValue(payload)}`] : []),
       `write-out = ${quoteCurlConfigValue(`\\n${marker}%{http_code}`)}`,''] .join('\n');
     const child=spawn('curl.exe',['--config','-'],{windowsHide:true,stdio:['pipe','pipe','pipe']});
@@ -204,7 +204,7 @@ async function publishGithubWorkspaces({roots,allowedRoots,repo,branch,token,sta
   }
 
   const desired=[]; const workspaceStates={};
-  const readme=`# Nexa Remote Unity Workspace\n\nThis branch is a machine-generated snapshot from Nexa AI Local Bridge 1.6.2.\n\n- Edit text files only under \`unity-workspaces/*/project/\` when you want the Windows Bridge to apply a change back to Unity.\n- Generated status, logs and visual metadata live under \`__NEXA__\`.\n- Remote deletes are intentionally not applied to the PC.\n- Local conflicts are never overwritten automatically.\n`;
+  const readme=`# Nexa Remote Unity Workspace\n\nThis branch is a machine-generated snapshot from Nexa AI Local Bridge 1.7.0.\n\n- Edit text files only under \`unity-workspaces/*/project/\` when you want the Windows Bridge to apply a change back to Unity.\n- Generated status, logs and visual metadata live under \`__NEXA__\`.\n- Remote deletes are intentionally not applied to the PC.\n- Local conflicts are never overwritten automatically.\n`;
   desired.push({path:'README.md',content:readme,hash:sha256Text(readme)});
 
   for(const snap of snapshots){

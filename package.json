@@ -1,14 +1,14 @@
 {
   "name": "nexa-ai-local-bridge",
-  "version": "1.6.3",
-  "description": "Secure Windows companion for Nexa AI Computer Bridge with Hostinger policy control, Unity mirroring, GitHub verification snapshots, and a transactional POP3S Remote Command Inbox for direct permission-gated Unity and Windows work.",
+  "version": "1.7.0",
+  "description": "Secure Windows companion for Nexa AI Computer Bridge with primary Hostinger command queue, direct file transfer, full permission-gated Windows/Unity execution, transactional rollback, and email only as optional fallback.",
   "main": "main.js",
   "author": "Nexa",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "validate": "node --check main.js && node --check preload.js && node --check src/app.js && node --check src/services/bridge-client.js && node --check src/services/workspace-client.js && node --check src/services/unity-diagnostics.js && node --check src/services/unity-workspace.js && node --check src/services/github-workspace.js && node --check src/services/remote-command-inbox.js && node --check src/services/remote-executor.js && node --check src/services/secure-config.js && node --check src/services/system-info.js && node --check src/services/policy.js && node --check src/services/logger.js && node --check src/services/read-only-executor.js && npm run validate:appbuilder && npm run validate:delivery && npm run validate:project && npm test",
+    "validate": "node --check main.js && node --check preload.js && node --check src/app.js && node --check src/services/bridge-client.js && node --check src/services/workspace-client.js && node --check src/services/unity-diagnostics.js && node --check src/services/unity-workspace.js && node --check src/services/github-workspace.js && node --check src/services/remote-command-inbox.js && node --check src/services/remote-executor.js && node --check src/services/hostinger-command-ledger.js && node --check src/services/secure-config.js && node --check src/services/system-info.js && node --check src/services/policy.js && node --check src/services/logger.js && node --check src/services/read-only-executor.js && npm run validate:appbuilder && npm run validate:delivery && npm run validate:project && npm test",
     "build:win": "npm run validate && electron-builder --win nsis portable zip --x64 --publish never",
     "build:linux": "npm run validate && electron-builder --linux AppImage deb --publish never",
     "build:mac": "npm run validate && electron-builder --mac dmg zip --publish never",
@@ -17,7 +17,7 @@
     "test": "npm run test:baseline && npm run test:implementation && npm run test:acceptance",
     "ui:smoke": "electron scripts/ui-smoke.js",
     "test:baseline": "node --test scripts/nexa-baseline.test.js",
-    "test:implementation": "node --test scripts/implementation.test.js scripts/network-transport.test.js scripts/unity-workspace.test.js scripts/github-workspace.test.js scripts/remote-command-inbox.test.js scripts/remote-executor.test.js",
+    "test:implementation": "node --test scripts/implementation.test.js scripts/network-transport.test.js scripts/unity-workspace.test.js scripts/github-workspace.test.js scripts/remote-command-inbox.test.js scripts/remote-executor.test.js scripts/hostinger-command-ledger.test.js",
     "test:acceptance": "node --test scripts/acceptance.test.js",
     "validate:appbuilder": "node scripts/validate-app-builder-compat.js"
   },

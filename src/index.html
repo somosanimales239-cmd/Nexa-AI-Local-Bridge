@@ -16,7 +16,7 @@
         <div><strong>Nexa AI Local Bridge</strong><small>Secure Windows Companion</small></div>
       </div>
       <div class="header-right">
-        <span id="version" class="version">v1.6.2</span>
+        <span id="version" class="version">v1.7.0</span>
         <span id="statusPill" class="status-pill offline"><i></i><b id="statusText">UNPAIRED</b></span>
       </div>
     </header>
@@ -109,7 +109,7 @@
 
         <article class="card github-workspace-card">
           <div class="section-heading compact">
-            <div><span class="eyebrow">GITHUB REMOTE WORKSPACE</span><h2>ChatGPT-readable mirror + local publish</h2><p>Publishes the authorized Unity mirror to a dedicated GitHub branch that this ChatGPT can inspect. GitHub remains the read/verification path; direct write commands use the secure Remote Command Inbox below.</p></div>
+            <div><span class="eyebrow">GITHUB REMOTE WORKSPACE</span><h2>ChatGPT-readable mirror + local publish</h2><p>Publishes the authorized Unity mirror to a dedicated GitHub branch for read/verification. Direct computer work uses the Hostinger command queue; GitHub write-back is legacy compatibility only.</p></div>
             <span id="githubBadge" class="chip blocked">Idle</span>
           </div>
           <div class="form-grid github-grid">
@@ -129,7 +129,7 @@
           </div>
           <div class="toggle-list workspace-toggles">
             <label class="toggle-row"><span><strong>Publish Unity workspace to GitHub</strong><small>After Hostinger sync, publish scripts, scenes, prefabs, shaders, materials, configs, logs, status, binary index and Unity captures to the workspace branch.</small></span><input id="githubSyncEnabled" type="checkbox"><i></i></label>
-            <label class="toggle-row"><span><strong>Legacy GitHub write-back</strong><small>Compatibility option only. Leave OFF when using the Remote Command Inbox; direct command packages are safer and avoid GitHub connector write limitations.</small></span><input id="githubApplyEnabled" type="checkbox"><i></i></label>
+            <label class="toggle-row"><span><strong>Legacy GitHub write-back</strong><small>Compatibility option only. Leave OFF for normal operation; direct changes come from the Hostinger command queue and are executed locally under the same safety policy.</small></span><input id="githubApplyEnabled" type="checkbox"><i></i></label>
           </div>
           <div class="button-row workspace-actions">
             <button id="githubSaveBtn" class="btn primary" type="button">Save & Verify GitHub</button>
@@ -142,7 +142,7 @@
 
         <article class="card remote-inbox-card">
           <div class="section-heading compact">
-            <div><span class="eyebrow">CHATGPT REMOTE COMMAND INBOX</span><h2>Secure write channel to Unity + Windows</h2><p>Receives command packages through a dedicated POP3S mailbox and cryptographically verifies DKIM against the exact allowed sender. Commands are challenge-checked, time-limited, replay-protected and permission-gated. File work is restricted to Allowed Folders, backed up transactionally, and can roll back automatically if Unity compilation fails. Optional email attachments can deliver assets directly to authorized folders.</p></div>
+            <div><span class="eyebrow">CHATGPT REMOTE COMMAND INBOX · OPTIONAL FALLBACK</span><h2>Email Remote Command Inbox</h2><p>Optional backup channel only. Normal direct work now comes from the Hostinger command queue. Keep this disabled unless you intentionally want the POP3S/SMTPS fallback. When enabled, it cryptographically verifies DKIM and keeps its challenge, replay, permission and Allowed Folder protections active.</p></div>
             <span id="remoteInboxBadge" class="chip blocked">Idle</span>
           </div>
           <div class="form-grid github-grid">
@@ -157,7 +157,7 @@
             <label class="field full"><span>Send full results back to</span><input id="remoteInboxResultRecipient" type="email" spellcheck="false" placeholder="your-connected-gmail@example.com"><small>Defaults to the allowed sender. Full command/read results return here over authenticated SMTPS; GitHub receives only a sanitized summary.</small></label>
           </div>
           <div class="toggle-list workspace-toggles">
-            <label class="toggle-row"><span><strong>Enable Remote Command Inbox</strong><small>When ON, Nexa checks the dedicated mailbox while connected to Hostinger. Emergency Stop always overrides this switch.</small></span><input id="remoteInboxEnabled" type="checkbox"><i></i></label>
+            <label class="toggle-row"><span><strong>Enable email fallback</strong><small>Optional. Hostinger direct commands work without Gmail/email. Emergency Stop always overrides both transports.</small></span><input id="remoteInboxEnabled" type="checkbox"><i></i></label>
             <label class="toggle-row"><span><strong>Require cryptographic DKIM verification</strong><small>Recommended ON. Nexa verifies the DKIM signature itself using the sender domain public key; it does not trust a spoofable Authentication-Results header by itself.</small></span><input id="remoteInboxRequireAuth" type="checkbox" checked><i></i></label>
             <label class="toggle-row"><span><strong>Email full command results</strong><small>Uses the same dedicated mailbox credentials over SMTPS to return complete results to the configured result recipient. Sensitive token patterns are redacted.</small></span><input id="remoteInboxSendResults" type="checkbox" checked><i></i></label>
           </div>
@@ -173,7 +173,7 @@
 
         <article class="card queue-card">
           <div class="section-heading compact">
-            <div><span class="eyebrow">REMOTE QUEUE · PERMISSION GATED</span><h2>Current Hostinger command</h2><p>Hostinger commands and secure inbox commands share the same permission gates. Supported jobs include file edits, email-attachment asset delivery, safe batch changes, CMD, PowerShell, Python, Git, HTTPS downloads, Unity refresh/play controls and temporary Unity Editor jobs. Arbitrary shell/code execution additionally requires Full Computer Mode.</p></div>
+            <div><span class="eyebrow">PRIMARY CONTROL PATH · HOSTINGER</span><h2>Current Hostinger command · direct control</h2><p>This is the primary computer-control path. The Hostinger page can queue reads, writes, searches, file transfers, transactional batches, CMD, PowerShell, Python, Git, browser actions, desktop captures and Unity work. Every action still passes Bridge Enabled, Emergency Stop, granular permissions, Full Computer Mode where required, Allowed Folders and rollback rules.</p></div>
             <span id="queueBadge" class="chip blocked">Idle</span>
           </div>
           <div id="currentCommand" class="current-command empty">No remote command is running.</div>
@@ -223,8 +223,8 @@
 
         <article class="card future-card">
           <span class="eyebrow">AI ACCESS</span>
-          <h2>Hostinger + GitHub + Secure Command Inbox</h2>
-          <p>v1.6.2 keeps GitHub as the read/verification mirror and adds a separate secure command channel for direct work on authorized Unity projects and Allowed Folders. File mutations are transactional and Hostinger permissions remain the master safety switch.</p>
+          <h2>Hostinger Direct Control + optional mirrors</h2>
+          <p>v1.7.0 uses the Hostinger command queue as the primary control path for authorized files, processes and Unity. GitHub is optional read/verification mirroring; the email inbox is optional fallback only. Transactional rollback and Hostinger permissions remain the master safety controls.</p>
         </article>
       </aside>
     </section>

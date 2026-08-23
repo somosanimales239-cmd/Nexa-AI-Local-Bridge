@@ -10,12 +10,13 @@ const { SafeLogger } = require('./src/services/logger');
 const { collectSystemInfo } = require('./src/services/system-info');
 const { BridgePolicy } = require('./src/services/policy');
 const {
-  validateEndpoint, deriveCommandEndpoint, pollCommand,
+  validateEndpoint, deriveCommandEndpoint, deriveFilesEndpoint, downloadBridgeFile, uploadBridgeFile, pollCommand,
   submitCommandResult, submitCommandError, submitCommandCancelled,
   sendHeartbeat, sendServerLog
 } = require('./src/services/bridge-client');
 const { executeSingleRemoteCommand, executeRemoteEnvelope } = require('./src/services/remote-executor');
 const { RemoteCommandInbox, testPop3Mailbox, testSmtpMailbox } = require('./src/services/remote-command-inbox');
+const { HostingerCommandLedger } = require('./src/services/hostinger-command-ledger');
 const { deriveWorkspaceEndpoint } = require('./src/services/workspace-client');
 const { syncUnityProject, installUnityIntegration, requestUnityCapture } = require('./src/services/unity-workspace');
 const { validateRepo, validateBranch, testGithubConnection, publishGithubWorkspaces } = require('./src/services/github-workspace');
@@ -37,6 +38,7 @@ let remoteInbox = null;
 let remoteInboxBusy = false;
 let workspaceBusy = false;
 let commandBusy = false;
+let hostingerCommandLedger = null;
 let retryIndex = 0;
 let systemInfo = null;
 let quitting = false;
@@ -208,12 +210,18 @@ function stopRemoteInboxTimer() {
 
 function remoteExecutionContext() {
   const cfg = configStore.publicConfig();
+  const token = configStore.getToken();
+  const filesEndpoint = deriveFilesEndpoint(cfg.endpoint);
   return {
     policy,
     systemInfo,
     allowedRoots: cfg.allowedRoots || [],
     unityRoots: cfg.unityRoots || [],
     userDataPath: app.getPath('userData'),
+    bridgeFiles: {
+      download: (fileId, maxBytes) => downloadBridgeFile(filesEndpoint, token, fileId, maxBytes),
+      upload: (filename, buffer, sha256) => uploadBridgeFile(filesEndpoint, token, filename, buffer, sha256),
+    },
   };
 }
 
@@ -544,6 +552,25 @@ async function connectInternal(payload, savePairing) {
 }
 
 
+async function deliverHostingerCommandFinal(endpoint, token, command, finalEntry) {
+  const kind = finalEntry?.final_kind;
+  if (kind === 'result') return submitCommandResult(endpoint, token, command.uuid, finalEntry.payload);
+  if (kind === 'cancelled') return submitCommandCancelled(endpoint, token, command.uuid);
+  const payload = finalEntry?.payload && typeof finalEntry.payload === 'object' ? finalEntry.payload : {};
+  return submitCommandError(endpoint, token, command.uuid, payload.error || 'Command failed.', payload.result || null);
+}
+
+function getHostingerCommandLedger() {
+  if (!hostingerCommandLedger) {
+    hostingerCommandLedger = new HostingerCommandLedger({
+      file: path.join(app.getPath('userData'), 'hostinger-command-ledger.json'),
+      maxEntries: 250,
+    });
+  }
+  return hostingerCommandLedger;
+}
+
+
 async function commandCycle() {
   stopCommandTimer();
   if (commandBusy || !state.paired || !state.connected) return;
@@ -564,29 +591,63 @@ async function commandCycle() {
     nextPollDelay = 1000;
 
     state.currentCommand = { uuid: command.uuid, action: command.action, status: 'running' };
-    safeActivity('info', 'command', `Running read-only command ${command.action} (${command.uuid}).`);
+    safeActivity('info', 'command', `Running Hostinger command ${command.action} (${command.uuid}).`);
     broadcastState();
 
-    if (command.cancel_requested) {
-      await submitCommandCancelled(endpoint, token, command.uuid);
-      safeActivity('warning', 'command', `Command cancelled before execution (${command.uuid}).`);
+    const ledger = getHostingerCommandLedger();
+    let decision = ledger.begin(command);
+
+    if (decision.mode === 'conflict') {
+      const error = 'Security stop: Hostinger reused a command UUID with different command contents. The command was not executed.';
+      const finalEntry = ledger.finish(command, 'error', { error });
+      await deliverHostingerCommandFinal(endpoint, token, command, finalEntry);
+      safeActivity('danger', 'command', `${error} (${command.uuid}).`);
       return;
     }
 
-    try {
-      const result = await executeSingleRemoteCommand(command, remoteExecutionContext());
-      if (result && result.cancelled) {
-        await submitCommandCancelled(endpoint, token, command.uuid);
-      } else if (result && result.ok === false) {
-        await submitCommandError(endpoint, token, command.uuid, result.error || 'Remote command failed.');
-      } else {
-        await submitCommandResult(endpoint, token, command.uuid, result);
+    if (decision.mode === 'uncertain') {
+      const error = 'Nexa recovered an interrupted command after the previous process ended before a final result was stored. To prevent duplicate file/process side effects, the command was not automatically re-executed; its outcome is uncertain.';
+      const finalEntry = ledger.finish(command, 'error', { error });
+      await deliverHostingerCommandFinal(endpoint, token, command, finalEntry);
+      safeActivity('warning', 'command', `Interrupted command protected from duplicate execution (${command.uuid}).`);
+      return;
+    }
+
+    if (decision.mode === 'replay') {
+      await deliverHostingerCommandFinal(endpoint, token, command, decision.entry);
+      safeActivity('info', 'command', `Re-submitted cached final result without re-executing ${command.action} (${command.uuid}).`);
+      return;
+    }
+
+    let finalEntry;
+    if (command.cancel_requested) {
+      finalEntry = ledger.finish(command, 'cancelled', null);
+    } else {
+      try {
+        const result = await executeSingleRemoteCommand(command, remoteExecutionContext());
+        if (result && result.cancelled) {
+          finalEntry = ledger.finish(command, 'cancelled', null);
+        } else if (result && result.ok === false) {
+          finalEntry = ledger.finish(command, 'error', { error: result.error || 'Remote command failed.', result });
+        } else {
+          finalEntry = ledger.finish(command, 'result', result);
+        }
+        if (result?.changed_files?.length) setTimeout(()=>workspaceSyncCycle(true).catch(()=>{}),1200);
+      } catch (error) {
+        finalEntry = ledger.finish(command, 'error', { error: error.message });
       }
-      safeActivity(result?.ok===false?'warning':'info', 'command', `${result?.ok===false?'Command failed':'Command completed'}: ${command.action} (${command.uuid}).`);
-      if (result?.changed_files?.length) setTimeout(()=>workspaceSyncCycle(true).catch(()=>{}),1200);
-    } catch (error) {
-      await submitCommandError(endpoint, token, command.uuid, error.message);
-      safeActivity('warning', 'command', `Command failed: ${command.action}: ${error.message}`);
+    }
+
+    try {
+      await deliverHostingerCommandFinal(endpoint, token, command, finalEntry);
+      const failed = finalEntry.final_kind === 'error';
+      safeActivity(failed ? 'warning' : 'info', 'command', `${failed ? 'Command failed' : 'Command completed'}: ${command.action} (${command.uuid}).`);
+    } catch (deliveryError) {
+      // The local final result is already durable. Do not convert a successful
+      // local execution into another execution or a different server result.
+      // The same running UUID will be polled again and this cached final result
+      // will be re-submitted without re-running the command.
+      safeActivity('warning', 'command-delivery', `Command finished locally; Hostinger result delivery will retry without re-execution: ${deliveryError.message}`);
     }
   } finally {
     state.currentCommand = null;

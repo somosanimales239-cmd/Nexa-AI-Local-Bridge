@@ -106,7 +106,7 @@ function requestJsonHttp11(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'User-Agent': 'Nexa-AI-Local-Bridge/1.2.2',
+        'User-Agent': 'Nexa-AI-Local-Bridge/1.7.0',
         'Content-Length': Buffer.byteLength(body),
         'Connection': 'close',
         'Cache-Control': 'no-cache',
@@ -214,7 +214,7 @@ function requestJsonWithWindowsCurl(endpoint, token, payload, timeoutMs = DEFAUL
       `header = ${quoteCurlConfigValue(`Authorization: Bearer ${token}`)}`,
       `header = ${quoteCurlConfigValue('Content-Type: application/json')}`,
       `header = ${quoteCurlConfigValue('Accept: application/json')}`,
-      `header = ${quoteCurlConfigValue('User-Agent: Nexa-AI-Local-Bridge/1.2.2')}`,
+      `header = ${quoteCurlConfigValue('User-Agent: Nexa-AI-Local-Bridge/1.7.0')}`,
       `header = ${quoteCurlConfigValue('Connection: close')}`,
       `data-binary = ${quoteCurlConfigValue(body)}`,
       `write-out = ${quoteCurlConfigValue(`\\n${statusMarker}%{http_code}`)}`,
@@ -338,6 +338,64 @@ async function postJson(endpoint, token, payload, timeoutMs = DEFAULT_TIMEOUT_MS
   return data;
 }
 
+
+
+function deriveFilesEndpoint(agentEndpoint) {
+  const url = new URL(validateEndpoint(agentEndpoint));
+  if (/\/agent\.php$/i.test(url.pathname)) {
+    url.pathname = url.pathname.replace(/agent\.php$/i, 'files.php');
+  } else {
+    url.pathname = url.pathname.replace(/\/$/, '') + '/files.php';
+  }
+  return url.toString();
+}
+
+function requestBinary(endpoint, token, { method='GET', query={}, headers={}, body=null, timeoutMs=60000, maxBytes=100*1024*1024 }={}) {
+  return new Promise((resolve,reject)=>{
+    const url = new URL(validateEndpoint(endpoint));
+    for (const [k,v] of Object.entries(query||{})) if (v !== undefined && v !== null) url.searchParams.set(k,String(v));
+    const isHttps=url.protocol==='https:'; const transport=isHttps?https:http; let settled=false;
+    const payload = Buffer.isBuffer(body) ? body : (body == null ? null : Buffer.from(body));
+    const options={protocol:url.protocol,hostname:url.hostname,port:url.port||(isHttps?443:80),path:`${url.pathname}${url.search}`,method,agent:false,headers:{
+      'Authorization':`Bearer ${token}`,'Accept':'application/octet-stream','User-Agent':'Nexa-AI-Local-Bridge/1.7.0','Connection':'close',...headers,
+      ...(payload?{'Content-Length':payload.length}:{})
+    },...(isHttps?{servername:url.hostname,ALPNProtocols:['http/1.1'],minVersion:'TLSv1.2',autoSelectFamily:true,autoSelectFamilyAttemptTimeout:250}:{})};
+    const req=transport.request(options,res=>{
+      const chunks=[];let bytes=0;
+      res.on('data',chunk=>{bytes+=chunk.length;if(bytes>maxBytes){const e=new Error('Bridge file response exceeded the configured maximum size.');e.code='RESPONSE_TOO_LARGE';req.destroy(e);return;}chunks.push(chunk);});
+      res.on('end',()=>{if(settled)return;settled=true;const buffer=Buffer.concat(chunks);if(res.statusCode<200||res.statusCode>=300){let detail='';try{detail=JSON.parse(buffer.toString('utf8')).error||'';}catch{}const e=new Error(`Hostinger file endpoint returned HTTP ${res.statusCode}.${detail?' '+detail:''}`);e.code='HTTP_ERROR';reject(e);return;}resolve({status:Number(res.statusCode||0),headers:res.headers||{},buffer});});
+      res.on('error',e=>{if(!settled){settled=true;reject(friendlyNetworkError(e,endpoint));}});
+    });
+    req.setTimeout(timeoutMs,()=>{const e=new Error(`Timed out after ${timeoutMs} ms`);e.code='NEXA_TIMEOUT';req.destroy(e);});
+    req.on('error',e=>{if(!settled){settled=true;reject(friendlyNetworkError(e,endpoint));}});
+    if(payload)req.end(payload);else req.end();
+  });
+}
+
+async function downloadBridgeFile(filesEndpoint, token, fileId, maxBytes=100*1024*1024) {
+  const response=await requestBinary(filesEndpoint,token,{method:'GET',query:{action:'download',id:fileId},maxBytes});
+  const sha=String(response.headers['x-nexa-sha256']||'').trim().toLowerCase();
+  const filename=decodeURIComponent(String(response.headers['x-nexa-filename']||'bridge-file.bin'));
+  return {buffer:response.buffer,sha256:sha,filename};
+}
+
+async function uploadBridgeFile(filesEndpoint, token, filename, buffer, sha256='') {
+  if(!Buffer.isBuffer(buffer))throw new Error('uploadBridgeFile requires a Buffer.');
+  const chunkSize=3*1024*1024;
+  if(buffer.length<=chunkSize){
+    const response=await requestBinary(filesEndpoint,token,{method:'POST',query:{action:'upload'},headers:{'Content-Type':'application/octet-stream','X-Nexa-Filename':encodeURIComponent(String(filename||'computer-file.bin')),'X-Nexa-Sha256':String(sha256||'')},body:buffer,maxBytes:2*1024*1024});
+    let data=null;try{data=JSON.parse(response.buffer.toString('utf8'));}catch{}if(!data||data.ok!==true)throw new Error('Hostinger returned an invalid file upload acknowledgement.');return data;
+  }
+  const uploadId=`up_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,14)}`;const total=Math.ceil(buffer.length/chunkSize);
+  for(let index=0;index<total;index+=1){
+    const chunk=buffer.subarray(index*chunkSize,Math.min(buffer.length,(index+1)*chunkSize));
+    const response=await requestBinary(filesEndpoint,token,{method:'POST',query:{action:'upload_chunk',upload_id:uploadId,index,total},headers:{'Content-Type':'application/octet-stream'},body:chunk,maxBytes:512*1024});
+    let ack=null;try{ack=JSON.parse(response.buffer.toString('utf8'));}catch{}if(!ack||ack.ok!==true)throw new Error(`Hostinger rejected file chunk ${index+1}/${total}.`);
+  }
+  const finish=await requestBinary(filesEndpoint,token,{method:'POST',query:{action:'upload_finish',upload_id:uploadId,total},headers:{'Content-Type':'application/octet-stream','X-Nexa-Filename':encodeURIComponent(String(filename||'computer-file.bin')),'X-Nexa-Sha256':String(sha256||'')},body:Buffer.alloc(0),maxBytes:2*1024*1024});
+  let data=null;try{data=JSON.parse(finish.buffer.toString('utf8'));}catch{}if(!data||data.ok!==true)throw new Error('Hostinger returned an invalid chunked upload acknowledgement.');return data;
+}
+
 async function sendHeartbeat(endpoint, token, systemInfo) {
   const cleanEndpoint = validateEndpoint(endpoint);
   const raw = await postJson(cleanEndpoint, token, { action: 'heartbeat', ...systemInfo });
@@ -387,9 +445,9 @@ async function submitCommandResult(commandEndpoint, token, uuid, result) {
   return postJson(endpoint, token, { action: 'result', uuid, result }, 25_000);
 }
 
-async function submitCommandError(commandEndpoint, token, uuid, error) {
+async function submitCommandError(commandEndpoint, token, uuid, error, result = null) {
   const endpoint = validateEndpoint(commandEndpoint);
-  return postJson(endpoint, token, { action: 'error', uuid, error: String(error || 'Command failed').slice(0, 4000) }, 25_000);
+  return postJson(endpoint, token, { action: 'error', uuid, error: String(error || 'Command failed').slice(0, 4000), ...(result && typeof result === 'object' ? { result } : {}) }, 25_000);
 }
 
 async function submitCommandCancelled(commandEndpoint, token, uuid) {
@@ -406,6 +464,10 @@ module.exports = {
   requestJsonResilient,
   postJson,
   deriveCommandEndpoint,
+  deriveFilesEndpoint,
+  requestBinary,
+  downloadBridgeFile,
+  uploadBridgeFile,
   pollCommand,
   submitCommandResult,
   submitCommandError,

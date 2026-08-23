@@ -1,111 +1,72 @@
-# Nexa AI Local Bridge 1.6.3
+# Nexa AI Local Bridge 1.7.0
 
-Windows companion for Nexa AI Computer Bridge.
+Windows companion for **Nexa AI Computer Bridge 6.0.0**.
 
-## 1.6.3 — Direct Remote Work Channel
+## Primary architecture
 
+`Hostinger Nexa AI Computer Bridge -> outbound polling by Nexa AI Local Bridge -> authorized Windows PC / Unity -> result back to Hostinger`
 
-### Gmail / DKIM interoperability fix
+The Hostinger command queue is the **primary control transport**. Gmail/POP3S is retained only as an optional fallback and is not required for normal operation.
 
-- Fixed RFC 6376 DKIM header oversigning verification. Gmail may intentionally list `From` more times in `h=` than the message contains; those nonexistent oversigned instances are null input, not a verification error.
-- Fixed the DKIM-Signature canonicalization boundary so the signature field is hashed without a trailing CRLF, as required by RFC 6376.
-- Added a real RSA cryptographic regression test for an oversigned `From` header so this exact Gmail failure cannot silently return.
-- This fix preserves cryptographic DKIM verification; it does not weaken the sender allowlist, challenge, expiration, replay protection, Hostinger permission gates, Allowed Folders, backups or rollback.
+## Direct computer capabilities
 
-### App Builder parser compatibility hardening
+The Hostinger queue can request, subject to the current web policy and local Allowed Folders:
 
-- Replaced the MIME encoded-word regex literal that Nexa App Builder's conservative local delimiter scanner misclassified as unterminated.
-- Added a package-wide `validate:appbuilder` gate that mirrors the App Builder delimiter/regex scanner before any future build is dispatched.
-- The final delivery is checked with both Node syntax validation and the actual PHP scanner logic recovered from the App Builder source used for this project.
+- computer, drive, directory, process, GPU and CUDA status;
+- `find_files`, `find_file`, `file_info`, `file_hash`, `read_file`;
+- text/base64 writes, create/copy/move/delete paths;
+- Hostinger -> PC and PC -> Hostinger file transfer without email;
+- HTTPS downloads;
+- CMD, PowerShell, Python, Git and general processes;
+- local-process start/stop and Blender execution;
+- desktop capture and URL opening;
+- Unity status, refresh, capture, play/stop/pause, scene open/save, menu actions, Editor jobs and compile wait;
+- transactional multi-action envelopes with rollback and optional Unity compile verification.
 
-This release keeps the working Hostinger + Unity + GitHub mirror from 1.5.0 and adds a separate, transactional Remote Command Inbox so remote work no longer depends on GitHub file-write permissions.
+## Reliability and safety fixes in 1.7.0
 
-### New secure Remote Command Inbox
+- A durable Hostinger command ledger prevents a command from being executed again only because final-result delivery temporarily failed.
+- If the app terminates while a command is in-flight and its outcome cannot be proven, Nexa reports the outcome as uncertain rather than automatically repeating a potentially destructive operation.
+- Reusing a command UUID with different contents is rejected.
+- Non-zero CMD/PowerShell/Python/Git/process exits fail the action by default instead of being reported as completed.
+- Failed transactional jobs can return structured rollback details to Hostinger.
+- File transfer uses chunking for larger PC -> Hostinger uploads.
 
-- Polls a dedicated POP3S mailbox over TLS.
-- Accepts only messages with subject prefix `[NEXA-CMD]`.
-- Enforces an allowlisted sender.
-- Can require SPF/DKIM/DMARC pass evidence from received headers.
-- Uses a rotating local channel challenge so copied or stale command packages are rejected.
-- Enforces command IDs, expiration windows and replay protection.
-- Stores mailbox password encrypted with Electron `safeStorage`.
-- Never publishes mailbox credentials to Hostinger or GitHub.
-- Writes only redacted command/result summaries into the mirrored `__NEXA__` status files.
+Existing controls remain enforced:
 
-### Remote work engine
+- Bridge Enabled;
+- Emergency Stop;
+- individual Hostinger permissions;
+- Full Computer Mode for high-control/shell/code actions;
+- Allowed Folders with junction/symlink escape protection;
+- transactional backups and rollback;
+- Unity compile verification;
+- local secret storage/redaction.
 
-A valid command package can perform permission-gated batches of actions, including:
+## Install once
 
-- computer status, drives, folders and file reads;
-- text and binary file writes;
-- create/copy/move/delete paths;
-- CMD, PowerShell, Python and Git commands;
-- explicit process execution when Full Computer Mode is enabled;
-- HTTPS file downloads into Allowed Folders;
-- Unity refresh, capture, play/stop/pause, scene open/save;
-- Unity menu item execution;
-- Unity Editor jobs;
-- wait for Unity compilation and collect real compiler diagnostics.
+Use `NEXA_AI_LOCAL_BRIDGE_V1_7_0_APP_BUILDER_READY.zip` in Nexa App Builder Pro and make one Windows build.
 
-Every action still requires the corresponding Hostinger permission and is restricted to configured Allowed Folders where applicable.
+After installing the resulting Windows build:
 
-### Transactional safety
+1. Keep the existing Agent Endpoint and pairing token.
+2. Keep the existing Allowed Folders and Unity Project Paths.
+3. Connect to Hostinger.
+4. The direct Hostinger queue begins polling automatically while connected.
+5. The Email Remote Command Inbox can remain OFF unless you intentionally want the fallback transport.
 
-- Multi-file jobs run as one transaction.
-- Existing files/folders are backed up before mutation.
-- Failed actions automatically roll back prior changes unless explicitly disabled.
-- Optional Unity compile verification can automatically roll back a completed batch if real compiler errors appear.
-- SHA-256 preconditions can protect files against overwriting concurrent local edits.
-- Symlink/junction escapes outside Allowed Folders are blocked.
-- Deleting or moving an Allowed Folder root itself is blocked.
-- Backup transactions are capped to avoid accidental huge local copies.
-
-### Unity integration
-
-The Unity bridge can now receive explicit local requests for:
-
-- AssetDatabase refresh;
-- Scene/Game capture;
-- Play/Stop/Pause/Unpause;
-- open/save scene;
-- execute Unity menu item;
-- run a temporary Unity Editor job;
-- wait for compilation and return clean diagnostics.
-
-The 1.5.0 diagnostic improvements remain intact: Licensing/service noise is kept separate from real C#/shader compile errors.
-
-### GitHub remains the read/verification mirror
-
-GitHub Remote Workspace remains available for:
-
-- C# scripts and Unity text assets;
-- ProjectSettings / Packages;
-- clean compile diagnostics;
-- scene/game screenshots;
-- verification snapshots that ChatGPT can inspect.
-
-The old GitHub write-back switch remains only as a compatibility option. For direct remote work use the Remote Command Inbox instead, because it does not depend on ChatGPT's GitHub connector having repository file-write permission.
-
-## One-time setup after installing 1.6.3
-
-1. Keep your existing Hostinger pairing and Allowed Folders.
-2. Keep your Unity Project Path configured.
-3. Reinstall **Unity Integration** once from the Windows app so the Unity-side command handler is current.
-4. Configure a dedicated POP3S mailbox in **Remote Command Inbox**.
-5. Set the allowed sender email address.
-6. Leave **Require authenticated sender** enabled unless your mail provider cannot expose SPF/DKIM/DMARC results through POP headers.
-7. Test the mailbox from the app.
-8. Enable **Remote Command Inbox**.
-9. Keep the Hostinger permissions you want remote jobs to use enabled. Emergency Stop always overrides all remote work.
-
-## Recommended operating mode
-
-- GitHub workspace publishing: ON for read/verification snapshots.
-- Legacy GitHub write-back: OFF.
-- Remote Command Inbox: ON after mailbox test passes.
-- Apply only the Hostinger permissions required for the current work.
-- Use Full Computer Mode only when a job genuinely needs arbitrary process execution outside the narrower built-in actions.
+The Unity integration version remains compatible with the current installed 1.6.2 plugin; this update does not require a Unity plugin rebuild solely for the new Hostinger transport.
 
 ## Validation
 
-The 1.6.3 source package includes syntax checks, delivery graph validation, project validation, baseline tests, implementation tests and acceptance tests covering the Remote Command Inbox, transactional executor, Unity integration, diagnostics, security gates, path restrictions and rollback behavior.
+The source package passes the complete project validation chain:
+
+- Node syntax checks for the Electron entry graph and services;
+- Nexa App Builder delimiter/regex compatibility scan;
+- delivery graph validation;
+- project validation;
+- baseline tests;
+- implementation tests;
+- acceptance tests.
+
+The Windows EXE itself is produced by the existing Nexa App Builder/GitHub Windows build workflow after this source package is installed.
